@@ -1,0 +1,30 @@
+/* Fontes iguais no Mac e no Windows.
+   No Mac, `local()` acha a fonte do sistema (Avenir Next, Palatino, Snell Roundhand…).
+   No Windows ela não existe, e entra o substituto livre de lib/fonts/ (licenças OFL/Apache na mesma pasta).
+   Uso: <link rel="stylesheet" href="../../lib/fonts.css"> no <head> da composição e
+   `await document.fonts.load('400 40px "Avenir Next"')` no window.ready, como já fazemos. */
+
+@font-face { font-family: 'Avenir Next'; font-weight: 200 1000; font-style: normal;
+  src: local('Avenir Next'), local('AvenirNext-Regular'), url('fonts/NunitoSans.ttf') format('truetype'); }
+@font-face { font-family: 'Avenir Next'; font-weight: 200 1000; font-style: italic;
+  src: local('Avenir Next Italic'), local('AvenirNext-Italic'), url('fonts/NunitoSans-Italic.ttf') format('truetype'); }
+
+@font-face { font-family: 'Palatino'; font-weight: 400 800; font-style: normal;
+  src: local('Palatino'), local('Palatino-Roman'), url('fonts/EBGaramond.ttf') format('truetype'); }
+@font-face { font-family: 'Palatino'; font-weight: 400 800; font-style: italic;
+  src: local('Palatino Italic'), local('Palatino-Italic'), url('fonts/EBGaramond-Italic.ttf') format('truetype'); }
+
+@font-face { font-family: 'Snell Roundhand'; font-weight: 100 900;
+  src: local('Snell Roundhand'), local('SnellRoundhand'), url('fonts/GreatVibes.ttf') format('truetype'); }
+
+@font-face { font-family: 'American Typewriter'; font-weight: 100 900;
+  src: local('American Typewriter'), local('AmericanTypewriter'), url('fonts/SpecialElite.ttf') format('truetype'); }
+
+@font-face { font-family: 'SF Pro Display'; font-weight: 100 900;
+  src: local('SF Pro Display'), local('SFProDisplay-Regular'), url('fonts/Inter.ttf') format('truetype'); }
+
+@font-face { font-family: 'Inter'; font-weight: 100 900;
+  src: local('Inter'), url('fonts/Inter.ttf') format('truetype'); }
+
+/* Helvetica Neue → Arial, Menlo → Consolas, Georgia e Courier New já existem no Windows:
+   basta manter a pilha de fallback no font-family ("Helvetica Neue", Arial, sans-serif). */

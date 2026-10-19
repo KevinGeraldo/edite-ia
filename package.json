@@ -1,0 +1,12 @@
+{
+  "name": "edite-ia",
+  "private": true,
+  "description": "Estúdio de edição de vídeo e motion graphics com Claude Code",
+  "dependencies": {
+    "puppeteer-core": "^23.11.1"
+  },
+  "devDependencies": {
+    "hyperframes": "^0.8.172",
+    "playwright": "^1.64.1"
+  }
+}

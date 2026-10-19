@@ -1,0 +1,399 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Lais</title>
+<style>html,body{margin:0;background:#000}canvas{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+const W = 1920, H = 1080, FPS = 60, SRC_FPS = 60000 / 1001, MAXF = 4873;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const SANS = '"Avenir Next", "Helvetica Neue", sans-serif';
+const SCRIPT = '"Snell Roundhand", "Apple Chancery", cursive';
+const PINK = '#FF4F9A', PINK2 = '#FF8CC6', PINK3 = '#FFD1E6', PLUM = '#5B1842';
+
+// ---------- helpers ----------
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const eio = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const esin = x => -(Math.cos(Math.PI * x) - 1) / 2;
+const eout = x => 1 - Math.pow(1 - x, 3);
+const ein = x => x * x * x;
+const back = x => { if (x <= 0) return 0; if (x >= 1) return 1; const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function heartPath(x, y, s) {
+  ctx.beginPath(); ctx.moveTo(x, y + s * 0.3);
+  ctx.bezierCurveTo(x, y, x - s * 0.5, y - s * 0.05, x - s * 0.5, y + s * 0.3);
+  ctx.bezierCurveTo(x - s * 0.5, y + s * 0.6, x, y + s * 0.75, x, y + s);
+  ctx.bezierCurveTo(x, y + s * 0.75, x + s * 0.5, y + s * 0.6, x + s * 0.5, y + s * 0.3);
+  ctx.bezierCurveTo(x + s * 0.5, y - s * 0.05, x, y, x, y + s * 0.3); ctx.closePath();
+}
+function sparkle(x, y, r, a) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(a); ctx.beginPath();
+  for (let i = 0; i < 4; i++) { ctx.rotate(Math.PI / 2); ctx.moveTo(0, 0); ctx.quadraticCurveTo(r * 0.12, r * 0.12, r, 0); ctx.quadraticCurveTo(r * 0.12, -r * 0.12, 0, 0); }
+  ctx.fill(); ctx.restore();
+}
+
+// ---------- edit timeline ----------
+const CUT1 = 13.0, SKIP = 4.5, OUTRO = 76.5, END = 81.0;
+const srcTime = T => T < CUT1 ? T : T + SKIP; // source seconds
+const FREEZE_S = 64.0;
+
+// camera keyframes [S, zoom, cx, cy, rot]
+const KEYS_A = [[0, 1.04, .5, .5, 0], [5, 1.09, .5, .48, 0], [9, 1.12, .52, .46, 0], [13, 1.17, .5, .45, 0]];
+const KEYS_B = [
+  [17.5, 1.20, .48, .42, 0], [21.6, 1.10, .48, .45, 0], [31, 1.16, .48, .42, 0], [39.4, 1.24, .48, .40, 0],
+  [40.4, 1.04, .5, .5, 0], [45.4, 1.05, .5, .5, 0], [46.6, 1.14, .48, .45, 0], [53, 1.20, .48, .45, 0],
+  [59.4, 1.25, .48, .47, 0], [60.4, 1.46, .475, .53, -0.006], [61.6, 1.52, .47, .56, 0.004],
+  [62.6, 1.16, .47, .45, 0], [66, 1.22, .45, .40, 0], [68.6, 1.06, .5, .5, 0], [71.5, 1.08, .5, .5, 0],
+  [76, 1.16, .5, .5, 0.004], [81.5, 1.24, .5, .5, -0.002]];
+function keyInterp(keys, S) {
+  if (S <= keys[0][0]) return keys[0].slice(1);
+  for (let i = 1; i < keys.length; i++) if (S <= keys[i][0]) {
+    const a = keys[i - 1], b = keys[i], f = eio((S - a[0]) / (b[0] - a[0]));
+    return [1, 2, 3, 4].map(j => lerp(a[j], b[j], f));
+  }
+  return keys[keys.length - 1].slice(1);
+}
+// claps detected in audio -> subtle beat zoom pulses
+const CLAPS = [21.92, 22.44, 22.86, 23.27, 23.68, 24.05, 24.45, 24.87, 25.21, 25.59, 25.97, 26.32, 26.68, 27.04, 27.36, 27.73, 28.44, 28.76, 29.12, 29.50, 29.82, 30.12, 30.48, 30.81, 31.14, 31.48, 31.86, 32.13, 32.47, 32.80, 33.12, 33.43, 33.78, 34.13, 34.40, 34.73, 35.34, 35.68, 35.99, 36.39, 36.62, 37.24, 37.56, 37.86, 38.19, 38.50, 38.84, 39.45, 46.76, 48.86, 49.81, 50.26, 50.70, 51.66, 52.55, 53.51, 53.84, 54.26, 55.08, 55.86, 56.57, 56.99, 57.34, 57.69, 58.03, 58.35, 58.66, 58.96, 59.24];
+function pulse(S) {
+  let p = 0;
+  for (const c of CLAPS) { const d = S - c; if (d >= 0 && d < 0.4) p += (c > 46 ? 0.016 : 0.007) * Math.exp(-d / 0.11); }
+  return p;
+}
+
+// ---------- frames ----------
+const cache = new Map();
+function loadFrame(i) {
+  i = Math.max(0, Math.min(MAXF, i));
+  if (cache.has(i)) return cache.get(i);
+  const p = new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = `frames/f_${String(i).padStart(5, '0')}.jpg`; });
+  cache.set(i, p); if (cache.size > 12) cache.delete(cache.keys().next().value);
+  return p;
+}
+let freezeCanvas = null;
+async function getFreeze() {
+  if (freezeCanvas) return freezeCanvas;
+  const im = await loadFrame(Math.round(FREEZE_S * SRC_FPS));
+  freezeCanvas = document.createElement('canvas'); freezeCanvas.width = W; freezeCanvas.height = H;
+  const c2 = freezeCanvas.getContext('2d');
+  c2.filter = 'blur(14px) saturate(1.2) brightness(1.05)'; c2.drawImage(im, -40, -40, W + 80, H + 80);
+  return freezeCanvas;
+}
+
+function drawVideo(im, z, cx, cy, rot, blur = 0) {
+  const zr = z * (1 + Math.abs(rot) * 1.9);
+  const hw = 0.5 / zr;
+  cx = clamp(cx, hw, 1 - hw); cy = clamp(cy, hw, 1 - hw);
+  ctx.save();
+  ctx.filter = `contrast(1.06) saturate(1.14) brightness(1.03)${blur ? ` blur(${blur}px)` : ''}`;
+  ctx.translate(W / 2, H / 2); ctx.rotate(rot); ctx.scale(zr, zr); ctx.translate(-cx * W, -cy * H);
+  ctx.drawImage(im, 0, 0, W, H); ctx.restore();
+}
+
+function grade(T) {
+  // pink soft-light tint
+  ctx.save(); ctx.globalCompositeOperation = 'soft-light'; ctx.fillStyle = 'rgba(255,140,190,0.13)'; ctx.fillRect(0, 0, W, H); ctx.restore();
+  // light leaks
+  ctx.save(); ctx.globalCompositeOperation = 'screen';
+  const leaks = [[0.08 + 0.05 * Math.sin(T * 0.35), 0.15 + 0.08 * Math.cos(T * 0.27), 700, 'rgba(255,92,160,', 0.16],
+                 [0.95 + 0.04 * Math.cos(T * 0.31), 0.9 + 0.06 * Math.sin(T * 0.22), 800, 'rgba(255,150,200,', 0.12],
+                 [0.85 + 0.06 * Math.sin(T * 0.19 + 1), 0.05, 500, 'rgba(255,200,225,', 0.10 + 0.05 * Math.sin(T * 0.9)]];
+  for (const [x, y, r, c, a] of leaks) {
+    const g = ctx.createRadialGradient(x * W, y * H, 0, x * W, y * H, r);
+    g.addColorStop(0, c + a + ')'); g.addColorStop(1, c + '0)'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  ctx.restore();
+  // vignette
+  const v = ctx.createRadialGradient(W / 2, H / 2, H * 0.45, W / 2, H / 2, H * 1.05);
+  v.addColorStop(0, 'rgba(60,10,40,0)'); v.addColorStop(1, 'rgba(60,10,40,0.42)');
+  ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+}
+
+// ---------- particles ----------
+const PR = rng(11), hearts = [];
+for (let i = 0; i < 34; i++) hearts.push({ x: PR(), sp: 40 + PR() * 70, s: 14 + PR() * 30, ph: PR() * 10, off: PR() * 1400, sw: 20 + PR() * 40, a: 0.35 + PR() * 0.45, c: [PINK, PINK2, PINK3, '#fff'][i % 4] });
+const bokeh = [];
+for (let i = 0; i < 18; i++) bokeh.push({ x: PR(), y: PR(), r: 30 + PR() * 70, ph: PR() * 6, sp: 0.1 + PR() * 0.3 });
+function particles(T, intensity) {
+  if (intensity <= 0) return;
+  ctx.save(); ctx.globalCompositeOperation = 'screen';
+  for (const b of bokeh) {
+    const x = (b.x + Math.sin(T * b.sp + b.ph) * 0.03) * W, y = (b.y + Math.cos(T * b.sp * 0.8 + b.ph) * 0.03) * H;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, b.r);
+    g.addColorStop(0, `rgba(255,150,200,${0.10 * intensity})`); g.addColorStop(1, 'rgba(255,150,200,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, b.r, 0, 7); ctx.fill();
+  }
+  ctx.restore();
+  for (const h of hearts) {
+    const span = H + 220, y = H + 110 - ((T * h.sp + h.off) % span);
+    const x = h.x * W + Math.sin(T * 1.3 + h.ph) * h.sw;
+    const edge = Math.min(1, (H + 110 - y) / 200, (y + 110) / 260);
+    ctx.globalAlpha = h.a * intensity * clamp(edge);
+    ctx.fillStyle = h.c; ctx.save(); ctx.translate(x, y); ctx.rotate(Math.sin(T * 1.7 + h.ph) * 0.3);
+    heartPath(0, -h.s / 2, h.s); ctx.fill(); ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+// confetti bursts
+const CF = rng(5), confetti = [];
+const cCols = [PINK, PINK2, '#fff', '#FFC2DD', '#FF2E7E', '#FFD86B'];
+for (let i = 0; i < 220; i++) {
+  const side = i % 2 ? 1 : -1, a = -Math.PI / 2 - side * (0.35 + CF() * 0.55);
+  const sp = 900 + CF() * 1100;
+  confetti.push({ side, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, c: cCols[i % 6], w: 12 + CF() * 14, h: 7 + CF() * 9, r: CF() * 6, vr: (CF() - .5) * 16, heart: CF() < 0.25, d: CF() * 0.15 });
+}
+function confettiBurst(T, t0) {
+  const ct = T - t0; if (ct < 0 || ct > 3.2) return;
+  for (const c of confetti) {
+    const t = ct - c.d; if (t < 0) continue;
+    const drag = (1 - Math.exp(-2.2 * t)) / 2.2;
+    const x = (c.side < 0 ? 0.04 * W : 0.96 * W) + c.vx * drag;
+    const y = H + 30 + c.vy * drag + 520 * t * t;
+    ctx.save(); ctx.globalAlpha = clamp(3.2 - ct); ctx.translate(x, y); ctx.rotate(c.r + c.vr * t); ctx.fillStyle = c.c;
+    if (c.heart) { heartPath(0, -c.w / 2, c.w * 1.2); ctx.fill(); }
+    else ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h * Math.abs(Math.cos(t * 8 + c.r)));
+    ctx.restore();
+  }
+}
+function heartBurst(T, t0, x, y) {
+  const ct = T - t0; if (ct < 0 || ct > 1.8) return;
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2, d = eout(clamp(ct / 1.2)) * (120 + (i % 3) * 50);
+    ctx.save(); ctx.globalAlpha = clamp(1.8 - ct) * 0.95; ctx.fillStyle = i % 2 ? PINK : '#fff';
+    const s = 22 + (i % 3) * 8; heartPath(x + Math.cos(a) * d, y + Math.sin(a) * d - ct * 40 - s / 2, s); ctx.fill(); ctx.restore();
+  }
+}
+
+// ---------- text ----------
+function spaced(s, x, y, sp, align = 'center') {
+  let w = 0; const ws = [...s].map(ch => { const m = ctx.measureText(ch).width; w += m + sp; return m; }); w -= sp;
+  let cx = align === 'center' ? x - w / 2 : x;
+  ctx.textAlign = 'left'; [...s].forEach((ch, i) => { ctx.fillText(ch, cx, y); cx += ws[i] + sp; });
+}
+const CAPS = [ // source-time captions
+  [5.6, 12.75, 'Acendendo as velinhas', '🕯️'],
+  [17.7, 21.7, 'Tudo pronto pra cantar!', '🎶'],
+  [21.9, 31.3, 'Parabéns pra você, nesta data querida', '🎵'],
+  [31.4, 39.9, 'Muitas felicidades, muitos anos de vida!', '🎵'],
+  [40.3, 45.8, 'Todo mundo cantando junto', '👏'],
+  [46.6, 52.9, 'É pique, é pique, é pique!', '🎉'],
+  [53.0, 57.7, 'É hora, é hora, é hora!', '⏰'],
+  [57.8, 60.6, 'Rá-tim-bum!', '🎈'],
+  [63.45, 68.6, 'Muito amor por você', '💗'],
+  [71.6, 80.6, 'Hora do bolo!', '🍰'],
+];
+function caption(S, T) {
+  for (const [a, b, text, emo] of CAPS) {
+    if (S < a - 0.05 || S > b + 0.4) continue;
+    const tin = S - a, tout = clamp((S - b) / 0.32);
+    const words = text.split(' ');
+    ctx.font = `700 50px ${SANS}`;
+    const gap = 15, ws = words.map(w => ctx.measureText(w).width);
+    ctx.font = `50px "Apple Color Emoji"`; const ew = ctx.measureText(emo).width;
+    const tw = ws.reduce((s, w) => s + w, 0) + gap * (words.length - 1) + 18 + ew;
+    const pw = tw + 84, ph = 92, x0 = W / 2 - pw / 2, y0 = H - 168;
+    const ps = back(clamp(tin / 0.42)) * (1 - ein(tout) * 0.15);
+    const alpha = clamp(tin / 0.18) * (1 - tout);
+    if (alpha <= 0) continue;
+    ctx.save(); ctx.globalAlpha = alpha; ctx.translate(W / 2, y0 + ph / 2 + ein(tout) * 30); ctx.scale(ps, ps); ctx.translate(-W / 2, -(y0 + ph / 2));
+    ctx.shadowColor = 'rgba(120,10,60,.45)'; ctx.shadowBlur = 30; ctx.shadowOffsetY = 10;
+    const g = ctx.createLinearGradient(x0, 0, x0 + pw, 0); g.addColorStop(0, 'rgba(255,70,150,.94)'); g.addColorStop(1, 'rgba(255,135,195,.94)');
+    rr(x0, y0, pw, ph, ph / 2); ctx.fillStyle = g; ctx.fill(); ctx.shadowColor = 'transparent';
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.stroke();
+    // shimmer sweep
+    const sx = x0 - 200 + ((tin * 0.6) % 1.6) / 1.6 * (pw + 400);
+    ctx.save(); rr(x0, y0, pw, ph, ph / 2); ctx.clip();
+    const sg = ctx.createLinearGradient(sx - 90, 0, sx + 90, 0); sg.addColorStop(0, 'rgba(255,255,255,0)'); sg.addColorStop(.5, 'rgba(255,255,255,.22)'); sg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = sg; ctx.fillRect(x0, y0, pw, ph); ctx.restore();
+    // words pop
+    let x = x0 + 42; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    words.forEach((w, i) => {
+      const wp = back(clamp((tin - 0.12 - i * 0.07) / 0.35));
+      ctx.save(); ctx.globalAlpha = alpha * clamp(wp * 1.5); ctx.translate(x + ws[i] / 2, y0 + ph / 2 + 3 + (1 - wp) * 22); ctx.scale(0.6 + 0.4 * wp, 0.6 + 0.4 * wp);
+      ctx.font = `700 50px ${SANS}`; ctx.fillStyle = '#fff'; ctx.shadowColor = 'rgba(150,0,70,.35)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 2;
+      ctx.textAlign = 'center'; ctx.fillText(w, 0, 0); ctx.restore();
+      x += ws[i] + gap;
+    });
+    const ep = back(clamp((tin - 0.12 - words.length * 0.07) / 0.4));
+    ctx.save(); ctx.globalAlpha = alpha * clamp(ep); ctx.translate(x + 3 + ew / 2, y0 + ph / 2 + 2); ctx.rotate(Math.sin(T * 4) * 0.12 * ep); ctx.scale(ep, ep);
+    ctx.font = `46px "Apple Color Emoji"`; ctx.textAlign = 'center'; ctx.fillText(emo, 0, 0); ctx.restore();
+    ctx.restore();
+  }
+}
+function badge(T) {
+  const a = eout(prog(T, 5.0, 5.7)) * (1 - prog(T, OUTRO - 0.6, OUTRO - 0.1));
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a; ctx.translate(-(1 - a) * 40, 0);
+  ctx.shadowColor = 'rgba(100,10,50,.3)'; ctx.shadowBlur = 20; ctx.shadowOffsetY = 6;
+  rr(54, 50, 318, 70, 35); ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.fill(); ctx.shadowColor = 'transparent';
+  const hb = 1 + 0.12 * Math.max(0, Math.sin(T * 6.5)) ** 8;
+  ctx.save(); ctx.translate(98, 85); ctx.scale(hb, hb); ctx.fillStyle = PINK; heartPath(0, -15, 32); ctx.fill(); ctx.restore();
+  ctx.fillStyle = PLUM; ctx.font = `700 30px ${SANS}`; ctx.textBaseline = 'middle'; spaced('LAÍS', 130, 87, 4, 'left');
+  ctx.fillStyle = PINK; ctx.font = `600 26px ${SANS}`; ctx.fillText('·  10 anos', 228, 88);
+  ctx.restore();
+}
+
+function intro(T) {
+  if (T > 5.2) return;
+  const out = eio(prog(T, 4.2, 5.0));
+  // pink veil
+  const veil = (1 - out) * (0.68 + 0.32 * (1 - eout(prog(T, 0, 0.9))));
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, `rgba(255,79,154,${0.78 * veil})`); g.addColorStop(1, `rgba(255,150,205,${0.62 * veil})`);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // expanding rings
+  for (let k = 0; k < 3; k++) {
+    const rp = prog(T, 0.2 + k * 0.25, 1.8 + k * 0.25);
+    if (rp > 0 && rp < 1) { ctx.strokeStyle = `rgba(255,255,255,${0.45 * (1 - rp) * (1 - out)})`; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(W / 2, H / 2 - 20, 120 + eout(rp) * 700, 0, 7); ctx.stroke(); }
+  }
+  const sc = 1 + out * 0.25;
+  ctx.save(); ctx.globalAlpha = 1 - out; ctx.translate(W / 2, H / 2); ctx.scale(sc, sc); ctx.translate(-W / 2, -H / 2);
+  // script line with wipe reveal
+  const sp = eio(prog(T, 0.35, 1.5));
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W * 0.18 + sp * W * 0.66, H); ctx.clip();
+  ctx.font = `150px ${SCRIPT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.shadowColor = 'rgba(140,0,70,.45)'; ctx.shadowBlur = 24; ctx.shadowOffsetY = 6; ctx.fillStyle = '#fff';
+  ctx.globalAlpha = (1 - out) * clamp(sp * 3); ctx.fillText('Feliz Aniversário', W / 2, H / 2 - 40); ctx.restore();
+  // name letters rise
+  const name = 'LAÍS MARTINS';
+  ctx.font = `800 118px ${SANS}`; ctx.textBaseline = 'alphabetic';
+  const sp2 = 16; let tw = 0; const lw = [...name].map(ch => { const m = ctx.measureText(ch).width; tw += m + sp2; return m; }); tw -= sp2;
+  let x = W / 2 - tw / 2;
+  [...name].forEach((ch, i) => {
+    const p = back(prog(T, 1.0 + i * 0.05, 1.55 + i * 0.05));
+    ctx.save(); ctx.globalAlpha = (1 - out) * clamp(p * 2); ctx.translate(x + lw[i] / 2, H / 2 + 110 + (1 - p) * 60);
+    ctx.fillStyle = '#fff'; ctx.shadowColor = 'rgba(140,0,70,.5)'; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8; ctx.textAlign = 'center';
+    ctx.fillText(ch, 0, 0); ctx.restore(); x += lw[i] + sp2;
+  });
+  // pill "10 anos"
+  const pp = back(prog(T, 1.9, 2.35));
+  if (pp > 0) {
+    ctx.save(); ctx.translate(W / 2, H / 2 + 200); ctx.scale(pp, pp);
+    rr(-150, -40, 300, 80, 40); ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.fillStyle = PINK; ctx.font = `700 42px ${SANS}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('10 anos', -18, 3);
+    ctx.font = `38px "Apple Color Emoji"`; ctx.fillText('🎂', 92, 2);
+    ctx.restore();
+  }
+  // twinkles
+  ctx.fillStyle = '#fff';
+  const tw2 = [[0.22, 0.28], [0.79, 0.24], [0.17, 0.62], [0.84, 0.66], [0.3, 0.8], [0.7, 0.82], [0.5, 0.16]];
+  tw2.forEach(([sx, sy], i) => {
+    const p = prog(T, 0.6 + i * 0.12, 1.2 + i * 0.12); const s = Math.sin(T * 5 + i) * 0.3 + 0.7;
+    ctx.globalAlpha = (1 - out) * clamp(p * 2) * s; sparkle(sx * W, sy * H, 18 + (i % 3) * 10, T * 0.8 + i);
+  });
+  ctx.restore();
+  // floating hearts burst behind title
+  ctx.globalAlpha = 1;
+}
+
+function outro(T) {
+  const t = T - OUTRO;
+  if (t < 0) return;
+  return true;
+}
+
+// ---------- frame ----------
+async function render(k) {
+  const T = k / FPS;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.filter = 'none'; ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  if (T < OUTRO + 0.6) {
+    const S = srcTime(Math.min(T, OUTRO + 0.6));
+    const im = await loadFrame(Math.round(S * SRC_FPS));
+    let [z, cx, cy, rot] = keyInterp(T < CUT1 ? KEYS_A : KEYS_B, S);
+    z *= 1 + pulse(S);
+    let blur = 0;
+    // whoosh at cut
+    const wOut = prog(T, CUT1 - 0.28, CUT1), wIn = 1 - prog(T, CUT1, CUT1 + 0.38);
+    if (T < CUT1 && wOut > 0) { z *= 1 + ein(wOut) * 0.22; rot += ein(wOut) * 0.025; blur = ein(wOut) * 9; }
+    if (T >= CUT1 && wIn > 0) { z *= 1 + eout(wIn) * 0.2; rot -= eout(wIn) * 0.02; blur = ein(wIn) * 9; }
+    drawVideo(im, z, cx, cy, rot, blur);
+    grade(T);
+    // flash at cut
+    const fl = Math.max(0, 1 - Math.abs(T - CUT1) / 0.3);
+    if (fl > 0) { const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W * 0.7); g.addColorStop(0, `rgba(255,235,245,${0.95 * fl})`); g.addColorStop(1, `rgba(255,110,180,${0.8 * fl})`); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); }
+    // particles intensity by section
+    let inten = 0.55;
+    if (S > 21.8 && S < 60) inten = 0.8;
+    if (S > 60.5 && S < 69) inten = 1.0;
+    particles(T, inten * clamp((T - 3.8) / 1.2));
+    // blow-out celebration
+    const BLOW = 61.25;
+    const bf = Math.max(0, 1 - Math.abs(S - BLOW) / 0.22);
+    if (bf > 0) { ctx.fillStyle = `rgba(255,220,238,${0.5 * bf})`; ctx.fillRect(0, 0, W, H); }
+    confettiBurst(S, BLOW);
+    heartBurst(S, 63.45, W * 0.47, H * 0.32);
+    // big "Viva a Laís!"
+    const vp = prog(S, BLOW + 0.05, BLOW + 0.6), vo = prog(S, 63.05, 63.4);
+    if (vp > 0 && vo < 1) {
+      const s = back(vp) * (1 + 0.04 * Math.sin((S - BLOW) * 6)) * (1 - ein(vo) * 0.3);
+      ctx.save(); ctx.globalAlpha = 1 - vo; ctx.translate(W / 2, 205); ctx.rotate(-0.04 + Math.sin(S * 3) * 0.015); ctx.scale(s, s);
+      ctx.font = `150px ${SCRIPT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 14; ctx.strokeStyle = PINK; ctx.lineJoin = 'round'; ctx.strokeText('Viva a Laís!', 0, 0);
+      ctx.shadowColor = 'rgba(120,0,60,.5)'; ctx.shadowBlur = 25; ctx.fillStyle = '#fff'; ctx.fillText('Viva a Laís!', 0, 0);
+      ctx.restore();
+      ctx.fillStyle = '#fff';
+      for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2 + S; ctx.globalAlpha = (1 - vo) * clamp(vp * 2) * (0.6 + 0.4 * Math.sin(S * 7 + i)); sparkle(W / 2 + Math.cos(a) * 470, 205 + Math.sin(a) * 120, 22, S * 2 + i); }
+      ctx.globalAlpha = 1;
+    }
+    intro(T);
+    badge(T);
+    caption(S, T);
+  }
+  if (T >= OUTRO - 0.6) await drawOutro(T);
+  ctx.globalAlpha = 1;
+}
+
+async function drawOutro(T) {
+  const t = T - OUTRO;
+  // iris wipe: pink circle grows (−0.6..0), then outro revealed through opening heart (0..0.6)
+  if (t < 0) {
+    const p = eio(prog(t, -0.6, 0));
+    ctx.save(); ctx.fillStyle = PINK; ctx.beginPath(); ctx.arc(W / 2, H / 2, p * 1200, 0, 7); ctx.fill();
+    ctx.fillStyle = PINK2; ctx.beginPath(); ctx.arc(W / 2, H / 2, Math.max(0, p * 1200 - 160), 0, 7); ctx.fill(); ctx.restore();
+    return;
+  }
+  const fz = await getFreeze();
+  const z = 1.06 + t * 0.025;
+  ctx.save(); ctx.translate(W / 2, H / 2); ctx.scale(z, z); ctx.drawImage(fz, -W / 2, -H / 2); ctx.restore();
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, 'rgba(255,79,154,.62)'); g.addColorStop(1, 'rgba(120,20,80,.55)'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  particles(T, 1);
+  // reveal through growing circle from pink
+  const op = eio(prog(t, 0, 0.7));
+  if (op < 1) { ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.moveTo(W / 2 + op * 1200, H / 2); ctx.arc(W / 2, H / 2, op * 1200, 0, Math.PI * 2, true); ctx.fillStyle = PINK2; ctx.fill('evenodd'); ctx.restore(); }
+  // texts
+  const a1 = eio(prog(t, 0.35, 1.4));
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W * 0.15 + a1 * W * 0.7, H); ctx.clip();
+  ctx.font = `160px ${SCRIPT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = '#fff';
+  ctx.shadowColor = 'rgba(100,0,50,.5)'; ctx.shadowBlur = 26; ctx.shadowOffsetY = 6;
+  ctx.fillText('Feliz 10 anos,', W / 2, H / 2 - 50); ctx.restore();
+  ctx.font = `800 130px ${SANS}`; ctx.textBaseline = 'alphabetic';
+  const nm = 'LAÍS!'; const sp2 = 18; let tw = 0; const lw = [...nm].map(ch => { const m = ctx.measureText(ch).width; tw += m + sp2; return m; }); tw -= sp2;
+  let x = W / 2 - tw / 2;
+  [...nm].forEach((ch, i) => {
+    const p = back(prog(t, 1.0 + i * 0.07, 1.5 + i * 0.07));
+    ctx.save(); ctx.globalAlpha = clamp(p * 2); ctx.translate(x + lw[i] / 2, H / 2 + 110 + (1 - p) * 60);
+    ctx.fillStyle = '#fff'; ctx.shadowColor = 'rgba(100,0,50,.55)'; ctx.shadowBlur = 24; ctx.shadowOffsetY = 8; ctx.textAlign = 'center';
+    ctx.fillText(ch, 0, 0); ctx.restore(); x += lw[i] + sp2;
+  });
+  const hp = back(prog(t, 1.5, 2.0));
+  if (hp > 0) { const hb = 1 + 0.1 * Math.max(0, Math.sin(t * 6)) ** 6; ctx.save(); ctx.translate(W / 2, H / 2 + 175); ctx.scale(hp * hb, hp * hb); ctx.fillStyle = '#fff'; heartPath(0, -24, 48); ctx.fill(); ctx.restore(); }
+  const dp = eout(prog(t, 1.9, 2.5));
+  ctx.save(); ctx.globalAlpha = dp; ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.font = `600 34px ${SANS}`; ctx.textBaseline = 'middle';
+  spaced('14 · 12 · 2024', W / 2, H / 2 + 270 + (1 - dp) * 20, 6); ctx.restore();
+  ctx.fillStyle = '#fff';
+  [[0.2, 0.3], [0.8, 0.27], [0.15, 0.7], [0.86, 0.72], [0.32, 0.18], [0.67, 0.84]].forEach(([sx, sy], i) => {
+    ctx.globalAlpha = clamp((t - 0.6 - i * 0.1) * 2) * (0.55 + 0.45 * Math.sin(T * 5 + i)); sparkle(sx * W, sy * H, 20 + (i % 3) * 10, T + i);
+  });
+  ctx.globalAlpha = 1;
+  // final fade
+  const ff = prog(T, END - 0.55, END);
+  if (ff > 0) { ctx.fillStyle = `rgba(30,5,20,${ein(ff)})`; ctx.fillRect(0, 0, W, H); }
+}
+
+window.renderFrame = async k => { await render(k); return cv.toDataURL('image/jpeg', 0.95).split(',')[1]; };
+window.ready = Promise.all([
+  document.fonts.load(`150px ${SCRIPT}`), document.fonts.load(`800 100px ${SANS}`), document.fonts.load(`700 50px ${SANS}`), document.fonts.load(`600 30px ${SANS}`)]);
+</script></body></html>

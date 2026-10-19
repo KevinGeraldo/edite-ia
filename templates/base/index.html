@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Base seek(t)</title>
+<style>html,body{margin:0;background:#111}canvas{display:block;max-width:100vw;max-height:100vh;margin:auto}</style></head>
+<body><canvas id="c"></canvas>
+<script type="module">
+// Ponto de partida: troque W/H/DUR e as CENAS. Tudo é função de t (segundos).
+// Prévia ao vivo: abra pelo render (http) ou qualquer servidor estático na raiz do projeto.
+import { clamp, prog, ease, sp, track, keyframes, rng, noise1 } from '../../lib/motion.js';
+
+const W = 1080, H = 1920, DUR = 4;
+const cv = document.getElementById('c'); cv.width = W; cv.height = H;
+const g = cv.getContext('2d');
+const FONT = '"Avenir Next", "Helvetica Neue", sans-serif';
+const INK = '#16131A', PAPER = '#F4EFE6', ACCENT = '#E8572A';
+
+const SCENES = [
+  { from: 0, to: 4, draw(t) {
+      // palavra que entra por partes, com mola pesada e um traço de acento
+      const words = ['feito', 'em', 'código'];
+      g.font = `800 150px ${FONT}`; g.textBaseline = 'alphabetic';
+      words.forEach((w, i) => {
+        const s = sp(t - 0.15 - i * 0.18, 'heavy');
+        g.save(); g.globalAlpha = clamp(s * 1.4);
+        g.translate(110, 820 + i * 170 + (1 - s) * 90);
+        g.fillStyle = i === 2 ? ACCENT : INK; g.fillText(w, 0, 0); g.restore();
+      });
+      const u = sp(t - 0.9, 'snappy');
+      g.fillStyle = ACCENT; g.fillRect(110, 1210, 620 * u, 16);
+      // grão leve, semeado por quadro
+      const r = rng(Math.floor(t * 24) + 1); g.fillStyle = 'rgba(0,0,0,.035)';
+      for (let i = 0; i < 900; i++) g.fillRect(r() * W, r() * H, 2, 2);
+  }},
+];
+
+function draw(t) {
+  // câmera "na mão" bem sutil
+  const sx = noise1(t * 0.7, 3) * 6, sy = noise1(t * 0.6, 9) * 6;
+  g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = PAPER; g.fillRect(0, 0, W, H);
+  g.setTransform(1, 0, 0, 1, sx, sy);
+  for (const s of SCENES) if (t >= s.from && t < s.to) s.draw(t - s.from);
+}
+window.seek = t => { draw(t); return true; };
+window.ready = Promise.all([document.fonts.load(`800 150px ${FONT}`)]);
+
+if (!navigator.webdriver) {
+  const t0 = performance.now();
+  (function loop() { draw(((performance.now() - t0) / 1000) % DUR); requestAnimationFrame(loop); })();
+}
+</script></body></html>

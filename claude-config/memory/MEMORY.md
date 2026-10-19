@@ -1,0 +1,1 @@
+- [NinjaBR Hub](ninjabr-hub.md) — ferramentas de IA do Kevin (vídeo "sem limite" Kling/Veo/Seedance), como operar e limites

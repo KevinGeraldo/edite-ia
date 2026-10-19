@@ -1,0 +1,3 @@
+# so no Windows (recorte de fundo sem o Vision do macOS)
+rembg[cpu]
+onnxruntime

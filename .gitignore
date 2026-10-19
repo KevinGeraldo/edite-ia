@@ -1,0 +1,37 @@
+# instalados por máquina (setup/setup-windows.ps1 ou npm/pip no Mac)
+node_modules/
+.venv/
+vendor/
+.env
+.env.*
+.DS_Store
+
+# repositório PÚBLICO: projetos (clientes, famílias, documentos) não sobem; vão inteiros pelo Google Drive
+projetos/
+__pycache__/
+*.pyc
+# (regras antigas, mantidas caso projetos/ volte a ser versionado num repositório privado)
+projetos/*/frames/
+projetos/*/out/
+projetos/*/prev/
+projetos/*/img/
+projetos/*/assets/
+projetos/*/geo/
+projetos/*/sfx_src/
+projetos/*/an/*.wav
+projetos/**/*.wav
+projetos/**/*.mp3
+projetos/**/*.mp4
+projetos/**/*.mov
+projetos/**/*.m4a
+projetos/**/*.flac
+projetos/**/*.png
+projetos/**/*.jpg
+projetos/**/*.jpeg
+projetos/**/*.webp
+projetos/**/*.npy
+projetos/**/*.pdf
+projetos/**/*.zip
+templates/*/prev/
+*.wav
+projetos/**/*.raw

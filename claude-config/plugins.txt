@@ -1,0 +1,4 @@
+marketplace claude-plugins-official anthropics/claude-plugins-official
+plugin skill-creator@claude-plugins-official
+plugin superpowers@claude-plugins-official
+plugin vercel@claude-plugins-official
