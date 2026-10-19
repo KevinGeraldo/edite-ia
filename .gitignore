@@ -35,3 +35,6 @@ projetos/**/*.zip
 templates/*/prev/
 *.wav
 projetos/**/*.raw
+
+# perfil de cada máquina (criado pelo setup)
+CLAUDE.local.md
