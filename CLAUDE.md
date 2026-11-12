@@ -31,6 +31,24 @@ Descubra também (ou deduza do material e diga o que deduziu):
 
 Num vídeo caseiro, não trave o trabalho com perguntas: analise o material e decida com bom senso. Num profissional, mostre o roteiro de cenas antes de animar.
 
+## Conhecimento por tipo de edição
+
+Cada tipo de edição tem o próprio conhecimento, numa skill do projeto que carrega sozinha quando o pedido é daquele tipo. Este `CLAUDE.md` guarda só o que vale para **todos**.
+
+| Tipo | Skill | Onde ficam os dados privados |
+|---|---|---|
+| Gameplay (highlights, montagens, cortes de live) | `.claude/skills/edicao-gameplay/` | `projetos/<nome>/` |
+| Criativos de produtos (anúncios, vídeos de venda) | `.claude/skills/edicao-criativos/` | ficha de cada produto em `projetos/_produtos/<produto>/produto.md` |
+| Histórias narradas (genealogia, biografia, documentário) | `.claude/skills/edicao-historias/` | `projetos/<nome>/` |
+
+- **No começo:** identifique o tipo e siga a skill dele. Em criativo, leia antes a ficha do produto (ou crie a partir de `projetos/_produtos/_modelo.md`).
+- **No fim de cada trabalho:**
+  - a lição que só vale para aquele tipo vai para a seção "Lições" da skill dele;
+  - a lição que só vale para aquele produto vai para a ficha do produto;
+  - só o que vale para todos os tipos entra aqui.
+- **Tipo novo** (podcast, aula, casamento...): crie a skill pelo `setup/modelo-tipo-de-edicao.md` e acrescente uma linha nesta tabela.
+- Repositório público: skills guardam só técnica. Marca, cliente, oferta e métricas ficam em `projetos/` (Google Drive).
+
 ## Estrutura
 
 ```
@@ -46,6 +64,7 @@ tools/sincronia.py     nota de sincronia: % dos efeitos com mudança na tela em 
 templates/base/        ponto de partida de motion do zero (seek(t) + lib/motion.js)
 templates/motion-grafico/  exemplo: app de delivery (10s, 9:16)
 templates/edicao-video/    exemplo: aniversário da Laís (vídeo real + overlays)
+templates/canal-dark-palitinho/  exemplo: canal dark com boneco (rig com IK, cenários desenhados, legenda palavra a palavra; 9:16)
 projetos/<nome>/       um diretório por trabalho; copie o template, não edite o original
 ```
 
@@ -205,11 +224,8 @@ Medido no anúncio do Edit IA Pro com `tools/sincronia.py`: a referência acerto
 - **Swift está quebrado nesta máquina** (SDK e compilador desalinhados). Para frameworks da Apple (Vision etc.), use PyObjC no `.venv`.
 - **Manchete palavra por palavra:** a frase anterior tem que terminar de sair **antes** da próxima entrar (saída em `[t1-0,14, t1]`, com `t1` limitado ao início da próxima). Senão as duas se sobrepõem.
 - **Material de terceiros no vídeo editado:** confira quadro a quadro os trechos usados. Telas de produto, pôsteres e logos aparecem no meio da filmagem e precisam ser evitados.
-- **Mapas com texto no topo:** enquadre a câmera para que nenhum lugar citado caia embaixo do bloco de texto. Isso já falhou duas vezes (travessia e caminho de volta).
-- **Documento em tela cheia:** limite a câmera às bordas do papel (`clamp` de ox/oy), senão aparece faixa preta.
-- **Natural Earth:** GeoJSON oficial em `raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/`. Na simplificação Douglas-Peucker, anéis fechados (início = fim) colapsam: simplifique em duas metades (`dpr` em `geoprep.py`). O relevo SR_50M é grosseiro (~3,7 km/px): reprojete com interpolação bilinear e desfoque conforme o zoom. O rio Mondego não existe na base 10m.
-- **Destaque em documento = câmera vai até ele:** quando um trecho é destacado (holofote ou círculo), a câmera centraliza e aproxima até o item ocupar boa parte da tela, no momento em que a voz o cita. Confira na prévia se a moldura cai exatamente sobre a palavra dita; posições estimadas a olho erram.
 - **Transições profissionais:** dissolver com desfoque e leve aproximação, sem achatamento de "virada de página", sem revelação por círculo ou recorte seco e sem texto que aparece cortado. Texto entra letra a letra com fade, não por máscara que corta.
+- Lições de mapas, documentos e Natural Earth: skill `edicao-historias`. Ritmo e retenção de anúncio: skill `edicao-criativos`.
 - **Buracos de tela vazia:** olhe o mosaico de 1 quadro a cada 5s do vídeo inteiro. Duas cenas que "se encostam" no papel podem deixar segundos pretos entre elas.
 - **Caminhos com espaço** ("Edite IA"): em Node, use `fileURLToPath`, nunca `new URL(...).pathname`.
 

@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Capital Oculto · Plano Collor (0–21s)</title>
+<link rel="stylesheet" href="../../lib/fonts.css">
+<style>html,body{margin:0;background:#000}canvas{display:block;max-width:100vw;max-height:100vh;margin:auto}</style></head>
+<body><canvas id="c"></canvas>
+<script type="module">
+import { clamp, lerp, prog, ease, spring, sp, track, keyframes, noise1, rng } from '../../lib/motion.js';
+
+const W = 1080, H = 1920, DUR = 21.1, F = 1 / 30;
+const cv = document.getElementById('c'); cv.width = W; cv.height = H;
+const g = cv.getContext('2d');
+const SANS = '"Avenir Next", "Helvetica Neue", sans-serif';
+const TYPE = '"American Typewriter", "Courier New", monospace';
+const C = { ink: '#141217', paper: '#F1E6CF', red: '#E03A3E', yel: '#FFD447', money: '#9CC58F', night: '#0E1424' };
+
+// ---------- tempos da narração (voz.wav, palavra por palavra) ----------
+const WORDS = [
+  [0.04, 'E'], [0.06, 'se'], [0.19, 'o'], [0.25, 'governo'], [0.70, 'trancasse'], [1.27, 'o'], [1.33, 'seu'], [1.52, 'dinheiro...'],
+  [2.08, 'da'], [2.22, 'noite'], [2.58, 'pro'], [2.93, 'dia?'],
+  [3.85, 'Não'], [3.95, 'é'], [4.05, 'ficção.'],
+  [5.19, 'Brasil,'], [5.42, 'março'], [5.91, 'de'], [6.11, '1990.'],
+  [8.29, 'A'], [8.32, 'inflação'], [8.53, 'passava'], [9.23, 'de'], [9.44, '80%'], [10.14, 'ao'], [10.34, 'mês.'],
+  [11.45, 'Os'], [11.50, 'preços'], [11.59, 'subiam'], [12.03, 'praticamente'], [12.92, 'todos'], [13.29, 'os'], [13.43, 'dias.'],
+  [14.65, 'Em'], [14.68, '15'], [14.79, 'de'], [14.85, 'março,'], [15.35, 'Fernando'], [15.99, 'Collor'], [16.47, 'toma'], [16.78, 'posse.'],
+  [17.93, 'E'], [17.95, 'no'], [17.97, 'dia'], [18.05, 'seguinte,'], [18.80, 'o'], [18.88, 'governo'], [19.47, 'anuncia'], [20.05, 'o'], [20.13, 'plano.'],
+];
+const HIT = { tranca: 0.70, dinheiro: 1.52, noite: 2.22, ficcao: 3.85, brasil: 5.19, marco: 5.42, ano: 6.11,
+  inflacao: 8.29, oitenta: 9.44, mes: 10.34, precos: 11.45, posse15: 14.65, nome: 15.35, posse: 16.78, seguinte: 18.05, plano: 20.13 };
+const SC = [0, 3.85, 8.29, 14.65, 17.93, DUR];   // cortes de cena
+
+// ---------- utilidades ----------
+const rr = (x, y, w, h, r) => { g.beginPath(); g.roundRect(x, y, w, h, r); };
+function txt(s, x, y, size, wt = 800, col = '#fff', align = 'center', font = SANS) { g.font = `${wt} ${size}px ${font}`; g.fillStyle = col; g.textAlign = align; g.textBaseline = 'middle'; g.fillText(s, x, y); }
+function fit(s, maxW, size, wt = 800, font = SANS) { g.font = `${wt} ${size}px ${font}`; const w = g.measureText(s).width; return w > maxW ? size * maxW / w : size; }
+const hitS = (t, t0, amt = .26) => { const a = clamp((t - t0 + F) / F); return a <= 0 ? 0 : a * (1 + amt * (1 - spring(t - t0, 600, 26))); };
+function withT(x, y, s, fn, rot = 0) { if (s <= 0) return; g.save(); g.translate(x, y); g.rotate(rot); g.scale(s, s); fn(); g.restore(); }
+const lc = (a, b, k) => { const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); const A = p(a), B = p(b); return `rgb(${A.map((v, i) => Math.round(lerp(v, B[i], k))).join(',')})`; };
+function stroke(pts, w, col) { g.strokeStyle = col; g.lineWidth = w; g.lineCap = 'round'; g.lineJoin = 'round'; g.beginPath(); g.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) g.lineTo(p[0], p[1]); g.stroke(); }
+
+// ---------- o boneco ----------
+const BASE = { lean: 0, head: 0, armB: [10, -10], armF: [-10, -15], legB: [0, 0], legF: [0, 0], eyes: 'open', mouth: 'flat', look: 0, brow: 0 };
+const L = { torso: 140, upA: 74, foA: 70, thigh: 88, shin: 88, head: 76 };
+const rad = d => d * Math.PI / 180;
+const SHIRT = { body: '#3E8F86', hi: '#7FD0C4', back: '#2B6B64', pants: '#2A2F45' };
+function limb(x, y, a1, a2, l1, l2, dir) {
+  const j = [x + Math.sin(rad(a1)) * l1 * dir, y + Math.cos(rad(a1)) * l1];
+  return [j, [j[0] + Math.sin(rad(a1 + a2)) * l2 * dir, j[1] + Math.cos(rad(a1 + a2)) * l2]];
+}
+function ik(S, T, l1, l2, bend) {
+  const dx = T[0] - S[0], dy = T[1] - S[1]; let d = Math.hypot(dx, dy); d = clamp(d, 1, l1 + l2 - .5);
+  const a = Math.atan2(dy, dx), c = clamp((l1 * l1 + d * d - l2 * l2) / (2 * l1 * d), -1, 1), b = Math.acos(c) * bend;
+  return [[S[0] + Math.cos(a + b) * l1, S[1] + Math.sin(a + b) * l1], [S[0] + Math.cos(a) * d, S[1] + Math.sin(a) * d]];
+}
+function drawGuy(x, y, s, P, dir = 1, extra, col = SHIRT) {
+  g.save(); g.translate(x, y); g.scale(s, s);
+  if (!P.noShadow) { g.fillStyle = 'rgba(0,0,0,.28)'; g.beginPath(); g.ellipse(0, 4, 95, 16, 0, 0, 7); g.fill(); }
+  const hip = [0, -(L.thigh + L.shin) + (P.bob || 0)];
+  const lean = rad(P.lean) * dir;
+  const neck = [hip[0] + Math.sin(lean) * L.torso, hip[1] - Math.cos(lean) * L.torso];
+  const sh = [lerp(hip[0], neck[0], .84), lerp(hip[1], neck[1], .84)];
+  const [kB, fB] = limb(hip[0] - 6 * dir, hip[1], P.legB[0], P.legB[1], L.thigh, L.shin, dir);
+  stroke([[hip[0] - 8 * dir, hip[1]], kB, fB], 30, '#151726'); stroke([fB, [fB[0] + 24 * dir, fB[1]]], 26, '#0c0b0e');
+  const [eB, hB] = P.handB ? ik(sh, P.handB, L.upA, L.foA, dir) : limb(sh[0], sh[1], P.armB[0], P.armB[1], L.upA, L.foA, dir);
+  stroke([sh, eB], 36, col.back); stroke([eB, hB], 26, '#0c0b0e'); g.fillStyle = '#0c0b0e'; g.beginPath(); g.arc(hB[0], hB[1], 16, 0, 7); g.fill();
+  const [kF, fF] = limb(hip[0] + 6 * dir, hip[1], P.legF[0], P.legF[1], L.thigh, L.shin, dir);
+  stroke([[hip[0] + 8 * dir, hip[1]], kF, fF], 32, col.pants); stroke([fF, [fF[0] + 26 * dir, fF[1]]], 28, C.ink);
+  g.save(); g.translate(hip[0], hip[1]); g.rotate(lean);
+  rr(-52, -L.torso - 10, 104, L.torso + 28, 38); g.fillStyle = col.body; g.fill();
+  if (col.sash) { g.save(); g.beginPath(); g.roundRect(-52, -L.torso - 10, 104, L.torso + 28, 38); g.clip();
+    g.strokeStyle = '#2E9E4F'; g.lineWidth = 30; g.beginPath(); g.moveTo(-60, -L.torso); g.lineTo(60, 10); g.stroke();
+    g.strokeStyle = '#F6D23C'; g.lineWidth = 12; g.beginPath(); g.moveTo(-60, -L.torso); g.lineTo(60, 10); g.stroke(); g.restore(); }
+  g.strokeStyle = col.hi; g.lineWidth = 3; g.globalAlpha = .5; g.beginPath(); g.moveTo(-36 * dir, -L.torso + 20); g.lineTo(-36 * dir, 6); g.stroke(); g.globalAlpha = 1;
+  g.restore();
+  const hc = [neck[0] + Math.sin(lean) * (L.head - 6), neck[1] - Math.cos(lean) * (L.head - 6)];
+  g.save(); g.translate(hc[0], hc[1]); g.rotate(rad(P.head) * dir);
+  g.fillStyle = C.ink; g.beginPath(); g.arc(0, 0, L.head, 0, 7); g.fill();
+  g.strokeStyle = 'rgba(255,220,170,.35)'; g.lineWidth = 4; g.beginPath(); g.arc(0, 0, L.head - 2, rad(200), rad(290)); g.stroke();
+  if (!P.noFace) {
+    const ex = 22 * dir + P.look * 6, ey = -8;
+    for (const k of [-1, 1]) {
+      const cx = ex + k * 20; g.fillStyle = '#F7F4EE';
+      if (P.eyes === 'happy') { g.strokeStyle = '#F7F4EE'; g.lineWidth = 6; g.beginPath(); g.arc(cx, ey + 6, 10, Math.PI * 1.1, Math.PI * 1.9); g.stroke(); }
+      else if (P.eyes === 'closed') g.fillRect(cx - 10, ey - 1, 20, 5);
+      else { const h = P.eyes === 'wide' ? 17 : P.eyes === 'half' ? 7 : 13; g.beginPath(); g.ellipse(cx, ey, 9, h, 0, 0, 7); g.fill();
+        g.fillStyle = C.ink; g.beginPath(); g.arc(cx + 3 * dir + P.look * 2, ey + 2, P.eyes === 'wide' ? 3.4 : 4.2, 0, 7); g.fill(); }
+      if (P.brow) { g.strokeStyle = '#F7F4EE'; g.lineWidth = 5; g.beginPath(); g.moveTo(cx - 10, ey - 22 - P.brow * 6 * k * dir); g.lineTo(cx + 10, ey - 22 + P.brow * 6 * k * dir); g.stroke(); }
+    }
+    g.fillStyle = '#F7F4EE'; g.strokeStyle = '#F7F4EE'; g.lineWidth = 6; g.lineCap = 'round';
+    const mx = ex + 2 * dir, my = 26;
+    if (P.mouth === 'smile') { g.beginPath(); g.arc(mx, my - 8, 14, rad(20), rad(160)); g.stroke(); }
+    else if (P.mouth === 'o') { g.beginPath(); g.ellipse(mx, my, 9, 13, 0, 0, 7); g.fill(); }
+    else if (P.mouth === 'sad') { g.beginPath(); g.arc(mx, my + 10, 13, rad(205), rad(335)); g.stroke(); }
+    else { g.beginPath(); g.moveTo(mx - 10, my); g.lineTo(mx + 10, my); g.stroke(); }
+  }
+  g.restore();
+  const [eF, hF] = P.handF ? ik(sh, P.handF, L.upA, L.foA, dir) : limb(sh[0], sh[1], P.armF[0], P.armF[1], L.upA, L.foA, dir);
+  stroke([sh, eF], 38, col.body); stroke([eF, hF], 27, C.ink); g.fillStyle = C.ink; g.beginPath(); g.arc(hF[0], hF[1], 17, 0, 7); g.fill();
+  if (extra) extra(hF, dir);
+  g.restore();
+}
+const mixPose = (a, b, k) => { const o = { ...(k < .5 ? a : b) }; for (const key of ['lean', 'head', 'bob', 'look', 'brow']) o[key] = lerp(a[key] || 0, b[key] || 0, k);
+  for (const key of ['armB', 'armF', 'legB', 'legF']) o[key] = [lerp(a[key][0], b[key][0], k), lerp(a[key][1], b[key][1], k)];
+  for (const key of ['handF', 'handB']) if (a[key] && b[key]) o[key] = [lerp(a[key][0], b[key][0], k), lerp(a[key][1], b[key][1], k)]; return o; };
+
+// ---------- objetos ----------
+function bill(x, y, s, rot = 0, a = 1) {   // nota de cruzado novo estilizada (não é réplica)
+  withT(x, y, s, () => { g.globalAlpha = a;
+    rr(-110, -52, 220, 104, 8); g.fillStyle = C.money; g.fill(); g.strokeStyle = '#5E8A57'; g.lineWidth = 4; g.stroke();
+    rr(-96, -40, 192, 80, 5); g.strokeStyle = 'rgba(60,100,55,.5)'; g.lineWidth = 2; g.stroke();
+    g.fillStyle = 'rgba(60,100,55,.35)'; g.beginPath(); g.arc(-48, 0, 28, 0, 7); g.fill();
+    txt('NCz$', 42, -6, 30, 800, '#3E6B39'); txt('1000', 42, 22, 22, 700, '#3E6B39'); g.globalAlpha = 1; }, rot);
+}
+function cashPile(x, y, s, n = 9, seed = 4) { const R = rng(seed); for (let i = 0; i < n; i++) bill(x + (R() - .5) * 120 * s, y - i * 9 * s, s * .95, (R() - .5) * .35); }
+function passbook(x, y, s, rot = 0) {
+  withT(x, y, s, () => { rr(-90, -120, 180, 240, 10); g.fillStyle = '#2C5E9E'; g.fill(); g.strokeStyle = '#1E3F6B'; g.lineWidth = 5; g.stroke();
+    txt('CADERNETA', 0, -60, 24, 800, '#F3E3B8'); txt('DE POUPANÇA', 0, -30, 24, 800, '#F3E3B8');
+    g.fillStyle = '#F3E3B8'; g.beginPath(); g.arc(0, 40, 30, 0, 7); g.fill(); txt('$', 0, 42, 38, 800, '#2C5E9E'); }, rot);
+}
+function padlock(x, y, s, open = 0) {
+  withT(x, y, s, () => {
+    g.strokeStyle = '#9AA3AE'; g.lineWidth = 34; g.lineCap = 'butt';
+    g.beginPath(); g.moveTo(-70, -10); g.lineTo(-70, -95 - open * 60); g.arc(0, -95 - open * 60, 70, Math.PI, 0); g.lineTo(70, -10 - open * 60); g.stroke();
+    g.strokeStyle = '#C9D0D8'; g.lineWidth = 8; g.beginPath(); g.arc(0, -95 - open * 60, 82, Math.PI * 1.15, Math.PI * 1.5); g.stroke();
+    rr(-120, -20, 240, 200, 26); const gr = g.createLinearGradient(0, -20, 0, 180); gr.addColorStop(0, '#F2B544'); gr.addColorStop(1, '#C27F1C'); g.fillStyle = gr; g.fill();
+    g.strokeStyle = '#8E5B10'; g.lineWidth = 6; g.stroke();
+    g.fillStyle = 'rgba(255,255,255,.35)'; rr(-100, -6, 200, 22, 10); g.fill();
+    g.fillStyle = '#3A2608'; g.beginPath(); g.arc(0, 62, 24, 0, 7); g.fill(); g.beginPath(); g.moveTo(-12, 70); g.lineTo(12, 70); g.lineTo(8, 130); g.lineTo(-8, 130); g.fill();
+  });
+}
+function chain(x0, y0, x1, y1, t0, t, s = 1) {   // corrente que se estende de (x0,y0) até (x1,y1)
+  const k = ease.out(prog(t, t0 - .12, t0 + .05)); if (k <= 0) return;
+  const len = Math.hypot(x1 - x0, y1 - y0), n = Math.floor(len / (46 * s) * k), a = Math.atan2(y1 - y0, x1 - x0);
+  for (let i = 0; i < n; i++) { const px = x0 + Math.cos(a) * i * 46 * s, py = y0 + Math.sin(a) * i * 46 * s;
+    withT(px, py, s, () => { g.strokeStyle = i % 2 ? '#7E8792' : '#B4BCC6'; g.lineWidth = 11; g.beginPath(); g.ellipse(0, 0, 30, i % 2 ? 7 : 16, 0, 0, 7); g.stroke(); }, a); }
+}
+function stamp(x, y, s, label, rot = -.12, col = C.red) {
+  withT(x, y, s, () => { g.font = `900 92px ${SANS}`; const w = g.measureText(label).width + 70;
+    g.globalAlpha = .93; rr(-w / 2, -70, w, 140, 14); g.strokeStyle = col; g.lineWidth = 12; g.stroke();
+    rr(-w / 2 + 14, -56, w - 28, 112, 8); g.lineWidth = 4; g.stroke(); txt(label, 0, 6, 92, 900, col); g.globalAlpha = 1; }, rot);
+}
+function calendar(x, y, s, mon, day, year, flip = 1, prevDay) {   // folhinha de parede; flip 0→1 vira a página
+  withT(x, y, s, () => {
+    rr(-170, -200, 340, 400, 18); g.fillStyle = '#FBF6EA'; g.fill(); g.strokeStyle = '#CDBFA3'; g.lineWidth = 4; g.stroke();
+    rr(-170, -200, 340, 96, [18, 18, 0, 0]); g.fillStyle = C.red; g.fill();
+    txt(mon, 0, -168, 44, 900, '#fff'); txt(year, 0, -126, 28, 700, 'rgba(255,255,255,.85)');
+    txt(String(day), 0, 50, 190, 900, '#1C1C24');
+    for (const k of [-90, 90]) { g.fillStyle = '#555'; g.beginPath(); g.arc(k, -200, 12, 0, 7); g.fill(); }
+    if (flip < 1 && prevDay != null) {   // a página anterior sobe e some
+      const k = ease.in(flip); g.save(); g.translate(0, -104); g.scale(1, 1 - k); g.globalAlpha = 1 - k * .3;
+      rr(-170, 0, 340, 304, [0, 0, 18, 18]); g.fillStyle = '#FBF6EA'; g.fill(); g.strokeStyle = '#CDBFA3'; g.stroke();
+      txt(String(prevDay), 0, 154, 190, 900, '#1C1C24'); g.restore(); }
+  });
+}
+
+// ---------- câmera ----------
+const IMP = [[HIT.tranca, 26], [HIT.dinheiro, 10], [HIT.ficcao, 14], [HIT.ano, 16], [HIT.oitenta, 20], [HIT.posse15, 12], [HIT.posse, 10], [HIT.plano, 22]];
+function camera(t, z, cx = W / 2, cy = H / 2) {
+  let sx = noise1(t * .7, 3) * 6, sy = noise1(t * .6, 9) * 6, kick = 0;
+  for (const [t0, a] of IMP) { const d = t - t0; if (d >= 0 && d < .5) { const e = Math.exp(-d * 9); sx += Math.sin(d * 70) * a * e; sy += Math.cos(d * 61) * a * .7 * e; kick += .035 * e * a / 20; } }
+  g.translate(W / 2 + sx, H / 2 + sy); g.scale(z + kick, z + kick); g.translate(-cx, -cy);
+}
+
+// ---------- cena A: o dinheiro trancado (0 – 3,85) ----------
+function sceneA(t) {
+  const night = ease.inOut(prog(t, HIT.noite - .1, 2.95));
+  g.fillStyle = lc('#E9D3A6', '#27304A', night); g.fillRect(0, 0, W, H);
+  // janela: sol se põe, lua sobe
+  const wx = 120, wy = 300, ww = 420, wh = 470;
+  g.save(); rr(wx, wy, ww, wh, 10); g.clip();
+  const sky = g.createLinearGradient(0, wy, 0, wy + wh); sky.addColorStop(0, lc('#7EC3F0', '#0B1230', night)); sky.addColorStop(1, lc('#FFE2A8', '#2A2F5E', night));
+  g.fillStyle = sky; g.fillRect(wx, wy, ww, wh);
+  const sunY = lerp(wy + 150, wy + wh + 120, night), moonY = lerp(wy + wh + 120, wy + 140, night);
+  g.fillStyle = '#FFD25E'; g.beginPath(); g.arc(wx + 140, sunY, 62, 0, 7); g.fill();
+  g.fillStyle = '#F4F1E2'; g.beginPath(); g.arc(wx + 290, moonY, 50, 0, 7); g.fill();
+  g.fillStyle = lc('#27304A', '#0B1230', night); g.beginPath(); g.arc(wx + 312, moonY - 14, 44, 0, 7); g.fill();
+  const R = rng(7); g.fillStyle = `rgba(255,255,255,${night})`; for (let i = 0; i < 26; i++) { g.beginPath(); g.arc(wx + R() * ww, wy + R() * wh * .7, 2 + R() * 2, 0, 7); g.fill(); }
+  g.fillStyle = lc('#5B8C6A', '#11182E', night); for (let i = 0; i < 6; i++) { rr(wx + i * 80 - 10, wy + wh - 120 - (i % 3) * 50, 70, 300, 4); g.fill(); }
+  g.restore();
+  g.strokeStyle = '#6B4A2B'; g.lineWidth = 22; g.strokeRect(wx, wy, ww, wh); g.lineWidth = 12; g.beginPath(); g.moveTo(wx + ww / 2, wy); g.lineTo(wx + ww / 2, wy + wh); g.moveTo(wx, wy + wh / 2); g.lineTo(wx + ww, wy + wh / 2); g.stroke();
+  // chão
+  g.fillStyle = lc('#B9875A', '#2B2232', night); g.fillRect(0, 1450, W, H); g.fillStyle = 'rgba(0,0,0,.18)'; g.fillRect(0, 1450, W, 16);
+  // mesa
+  const tx = 470, ty = 1180;
+  g.fillStyle = '#7A4E2C'; rr(tx - 330, ty, 660, 40, 10); g.fill(); g.fillStyle = '#5E3B20'; g.fillRect(tx - 300, ty + 40, 30, 330); g.fillRect(tx + 270, ty + 40, 30, 330);
+  // dinheiro + caderneta
+  passbook(tx + 170, ty - 120, .75, .12);
+  cashPile(tx - 60, ty - 40, 1.05, 10);
+  // corrente e cadeado: caem no "trancasse"
+  chain(tx - 420, ty - 300, tx + 260, ty + 60, HIT.tranca, t, 1);
+  chain(tx + 300, ty - 330, tx - 380, ty + 40, HIT.tranca + .06, t, 1);
+  const fall = prog(t, HIT.tranca - .28, HIT.tranca); const ly = ty - 170;
+  if (t > HIT.tranca - .28) {
+    const y = t < HIT.tranca ? lerp(-500, ly, fall * fall) : ly; const sq = t < HIT.tranca ? 1 : 1 + .12 * Math.exp(-(t - HIT.tranca) * 12) * Math.cos((t - HIT.tranca) * 40);
+    g.save(); g.translate(tx - 40, y + 180); g.scale(1 / sq, sq); g.translate(-(tx - 40), -(y + 180)); padlock(tx - 40, y, 1.25); g.restore();
+  }
+  if (t > HIT.dinheiro - F) stamp(tx - 20, ty - 470, hitS(t, HIT.dinheiro, .3), 'BLOQUEADO');
+  // o boneco: estica a mão para o dinheiro, leva o susto
+  const scare = sp(t - HIT.tranca, 'snappy');
+  const reach = { ...BASE, lean: 14, handF: [125, -250], armB: [20, -30], mouth: 'smile', eyes: 'happy' };
+  const jump = { ...BASE, lean: -14, bob: -30 * Math.exp(-(t - HIT.tranca) * 5), armF: [-120, -60], armB: [-100, -70], eyes: 'wide', mouth: 'o', brow: 1 };
+  const sad = { ...BASE, lean: 4, head: 8, armF: [-10, -20], armB: [10, -10], eyes: 'half', mouth: 'sad', brow: 1, look: -1 };
+  let P = t < HIT.tranca ? reach : mixPose(reach, jump, scare);
+  if (t > 2.2) P = mixPose(jump, sad, ease.inOut(prog(t, 2.2, 2.8)));
+  drawGuy(800, 1660, 1.38, P, -1);
+  // véu da noite sobre tudo
+  g.fillStyle = `rgba(10,16,40,${.32 * night})`; g.fillRect(0, 0, W, H);
+}
+
+// ---------- cena B: volta no tempo até março de 1990 (3,85 – 8,29) ----------
+function flipDigit(x, y, d0, d1, k) {   // dígito de relógio de virar
+  const w = 150, h = 230; rr(x - w / 2, y - h / 2, w, h, 16); g.fillStyle = '#1C1F2B'; g.fill();
+  const show = k < .5 ? d0 : d1; txt(String(show), x, y + 6, 190, 800, '#F3E9D2', 'center', SANS);
+  g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(x - w / 2, y - 3, w, 6);
+  if (k > 0 && k < 1) { const s = Math.abs(Math.cos(k * Math.PI)); g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(x - w / 2, y - h / 2 + (k < .5 ? 0 : h / 2), w, h / 2 * (1 - s)); }
+}
+function sceneB(t) {
+  const lt = t - SC[1];
+  // sala de 1990: papel de parede, TV de tubo, telefone de disco, folhinha
+  g.fillStyle = '#D9C7A0'; g.fillRect(0, 0, W, H);
+  g.fillStyle = 'rgba(150,110,60,.18)'; for (let x = 0; x < W; x += 90) g.fillRect(x, 0, 36, 1460);
+  g.fillStyle = '#8A5A34'; g.fillRect(0, 1460, W, H);
+  // rack + TV de tubo
+  g.fillStyle = '#5C3A1E'; rr(90, 1180, 560, 300, 12); g.fill();
+  rr(130, 830, 470, 360, 40); g.fillStyle = '#3A3530'; g.fill(); rr(165, 865, 330, 290, 50); g.fillStyle = '#1A2230'; g.fill();
+  g.fillStyle = 'rgba(160,200,255,.25)'; rr(185, 885, 120, 70, 30); g.fill();
+  for (const k of [0, 1]) { g.fillStyle = '#BFB6A8'; g.beginPath(); g.arc(545, 920 + k * 70, 22, 0, 7); g.fill(); }
+  g.strokeStyle = '#555'; g.lineWidth = 6; g.beginPath(); g.moveTo(330, 830); g.lineTo(240, 690); g.moveTo(330, 830); g.lineTo(430, 700); g.stroke();
+  // bandeira na TV quando diz "Brasil"
+  if (t > HIT.brasil - F) withT(330, 1010, hitS(t, HIT.brasil) * .9, () => {
+    g.fillStyle = '#1E9E4A'; g.fillRect(-130, -85, 260, 170); g.fillStyle = '#F6D23C'; g.beginPath(); g.moveTo(0, -70); g.lineTo(115, 0); g.lineTo(0, 70); g.lineTo(-115, 0); g.fill();
+    g.fillStyle = '#21409A'; g.beginPath(); g.arc(0, 0, 40, 0, 7); g.fill(); });
+  // telefone de disco no rack
+  withT(780, 1360, 1, () => { rr(-110, -40, 220, 120, 30); g.fillStyle = '#C8332E'; g.fill(); g.fillStyle = '#E8E0D0'; g.beginPath(); g.arc(0, 20, 46, 0, 7); g.fill();
+    g.fillStyle = '#C8332E'; for (let i = 0; i < 10; i++) { const a = -2.4 + i * .48; g.beginPath(); g.arc(Math.cos(a) * 32, 20 + Math.sin(a) * 32, 7, 0, 7); g.fill(); }
+    rr(-130, -80, 260, 46, 22); g.fillStyle = '#A82621'; g.fill(); });
+  g.fillStyle = '#5C3A1E'; rr(650, 1420, 260, 40, 8); g.fill();
+  // folhinha na parede: MARÇO 1990
+  const calS = t > HIT.marco - F ? hitS(t, HIT.marco) : 0; calendar(820, 760, calS * .85, 'MARÇO', 1, '1990');
+  // relógio de virar: o ano corre de 2026 até 1990
+  const k = ease.inOut(prog(t, SC[1] + .2, HIT.ano + .25)); const yr = Math.round(lerp(2026, 1990, k));
+  const yrPrev = Math.round(lerp(2026, 1990, ease.inOut(prog(t - .06, SC[1] + .2, HIT.ano + .25))));
+  const ph = (t * 18) % 1, s = 1 + (t > HIT.ano ? .2 * Math.exp(-(t - HIT.ano) * 6) : 0);
+  withT(W / 2, 330, s, () => {
+    rr(-360, -150, 720, 300, 30); g.fillStyle = 'rgba(14,18,30,.92)'; g.fill();
+    const dg = String(yr).split(''), dp = String(yrPrev).split('');
+    dg.forEach((d, i) => flipDigit(-240 + i * 160, 0, dp[i], d, dp[i] !== d ? ph : 1));
+  });
+  txt('NÃO É FICÇÃO', W / 2, 560, 50, 800, 'rgba(255,255,255,.95)', 'center', TYPE);
+  g.globalAlpha = clamp((lt) / .15); g.globalAlpha = 1;
+  // vinheta sépia (1990)
+  const vg = g.createRadialGradient(W / 2, H / 2, 300, W / 2, H / 2, 1200); vg.addColorStop(0, 'rgba(90,60,20,0)'); vg.addColorStop(1, 'rgba(60,35,10,.45)'); g.fillStyle = vg; g.fillRect(0, 0, W, H);
+}
+
+// ---------- cena C: inflação no supermercado (8,29 – 14,65) ----------
+function product(x, y, kind, col) {
+  if (kind === 0) { rr(x - 40, y - 110, 80, 110, 8); g.fillStyle = col; g.fill(); g.fillStyle = 'rgba(255,255,255,.7)'; g.fillRect(x - 30, y - 70, 60, 26); }
+  else if (kind === 1) { g.fillStyle = col; rr(x - 32, y - 120, 64, 120, 6); g.fill(); g.beginPath(); g.moveTo(x - 32, y - 120); g.lineTo(x, y - 145); g.lineTo(x + 32, y - 120); g.fill(); }
+  else { g.fillStyle = col; rr(x - 36, y - 100, 72, 100, 14); g.fill(); g.fillStyle = 'rgba(0,0,0,.2)'; g.fillRect(x - 36, y - 80, 72, 10); }
+}
+function priceTag(x, y, s, val, rot = 0, fresh = 0) {
+  withT(x, y, s, () => { rr(-130, -56, 260, 112, 10); g.fillStyle = fresh ? '#FFF27A' : '#FFF8D6'; g.fill(); g.strokeStyle = '#C9A53A'; g.lineWidth = 4; g.stroke();
+    txt('NCz$', -78, 2, 30, 800, '#7A5A10'); txt(val, 36, 4, fit(val, 150, 62), 900, '#2A1E05'); }, rot);
+}
+function sceneC(t) {
+  g.fillStyle = '#EFE7D8'; g.fillRect(0, 0, W, H);
+  // estantes ao fundo
+  const cols = ['#E25B45', '#4C8BD6', '#F2B43A', '#5DB07A', '#B565C9', '#F07F2E'];
+  for (let r = 0; r < 4; r++) { const y = 260 + r * 240; g.fillStyle = '#9C7B58'; g.fillRect(0, y, W, 22);
+    const R = rng(11 + r); for (let i = 0; i < 12; i++) product(50 + i * 90, y, Math.floor(R() * 3), cols[Math.floor(R() * cols.length)]); }
+  g.fillStyle = 'rgba(239,231,216,.45)'; g.fillRect(0, 0, W, 1240);
+  g.fillStyle = '#CFC4B0'; g.fillRect(0, 1240, W, H);
+  // pacote de arroz em destaque
+  const px = 380, py = 1250;
+  rr(px - 170, py - 380, 340, 380, 26); g.fillStyle = '#F7F2E6'; g.fill(); g.strokeStyle = '#C9BFA9'; g.lineWidth = 5; g.stroke();
+  g.fillStyle = '#2F7D3A'; rr(px - 170, py - 300, 340, 120, 0); g.fill(); txt('ARROZ', px, py - 240, 76, 900, '#FFF');
+  txt('5 kg', px, py - 120, 44, 800, '#2F7D3A');
+  // preço: cada dia ~2% (80% em 30 dias). Valores ilustrativos.
+  const d0 = HIT.precos, d1 = 14.4; const day = 1 + Math.floor(29 * clamp((t - d0) / (d1 - d0)));
+  const pr = 100 * Math.pow(1.8, (day - 1) / 29);
+  const nTags = t < d0 ? 1 : day; const R = rng(5);
+  for (let i = 0; i < Math.min(nTags, 30); i++) { const fresh = i === nTags - 1 && t > d0; const tS = d0 + (i - 1) * (d1 - d0) / 29;
+    const sc = i === 0 ? 1 : hitS(t, tS, .3); const v = (100 * Math.pow(1.8, i / 29)).toFixed(0) + ',00';
+    priceTag(px + (R() - .5) * 40, py - 520 - i * 4, sc, v, (R() - .5) * .22, fresh); }
+  // folhinha que vira os dias
+  calendar(860, 360, .62, 'MARÇO', day < 10 ? day : day, '1990'); g.globalAlpha = 1;
+  // termômetro de inflação
+  const m = t < HIT.oitenta ? ease.out(prog(t, SC[2] + .1, HIT.oitenta)) * .8 : .8;
+  withT(860, 800, 1, () => { rr(-90, -250, 180, 520, 30); g.fillStyle = 'rgba(20,22,34,.92)'; g.fill();
+    rr(-26, -210, 52, 360, 26); g.fillStyle = '#3A3D4C'; g.fill(); const hgt = 360 * m; rr(-26, 150 - hgt, 52, hgt, 26); g.fillStyle = C.red; g.fill();
+    g.beginPath(); g.arc(0, 190, 44, 0, 7); g.fill(); txt('INFLAÇÃO', 0, -280, 36, 900, '#1C1C24');
+    if (t > HIT.oitenta - F) withT(0, 190, hitS(t, HIT.oitenta, .35), () => txt('80%', 0, 2, 40, 900, '#fff'));
+    if (t > HIT.mes - F) withT(0, 330, hitS(t, HIT.mes), () => { rr(-120, -36, 240, 72, 36); g.fillStyle = C.red; g.fill(); txt('AO MÊS', 0, 2, 40, 900, '#fff'); }); });
+  // o boneco: segura a nota que vai encolhendo
+  const worry = prog(t, d0, d1); const nb = lerp(1, .45, worry);
+  const P = { ...BASE, lean: 4, handF: [120, -250], armB: [12, -14], eyes: worry > .4 ? 'wide' : 'open', mouth: worry > .55 ? 'sad' : 'flat', brow: worry > .3 ? 1 : 0, look: -1 };
+  drawGuy(600, 1700, 1.25, P, -1, (h) => bill(h[0] - 30, h[1] - 50, nb * .9, -.2));
+}
+
+// ---------- cena D: a posse (14,65 – 17,93) ----------
+function sceneD(t) {
+  const sky = g.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, '#6FB3E8'); sky.addColorStop(1, '#D9EEF9'); g.fillStyle = sky; g.fillRect(0, 0, W, H);
+  // palácio de colunas curvas (silhueta modernista genérica)
+  const gy = 1180; g.fillStyle = '#F4F4F0';
+  g.fillRect(-40, gy - 330, W + 80, 46); g.fillRect(-40, gy - 40, W + 80, 40);
+  for (let i = 0; i < 9; i++) { const x = 40 + i * 125; g.beginPath(); g.moveTo(x - 40, gy - 290); g.quadraticCurveTo(x, gy - 150, x - 6, gy - 40); g.lineTo(x + 6, gy - 40); g.quadraticCurveTo(x, gy - 150, x + 40, gy - 290); g.fill(); }
+  g.fillStyle = 'rgba(40,70,100,.35)'; g.fillRect(-40, gy - 284, W + 80, 244);
+  // rampa
+  g.fillStyle = '#E4E2DA'; g.beginPath(); g.moveTo(200, gy); g.lineTo(560, gy - 40); g.lineTo(560, gy - 10); g.lineTo(200, gy + 60); g.fill();
+  g.fillStyle = '#B9C78F'; g.fillRect(0, gy, W, H);
+  // bandeira no mastro
+  g.fillStyle = '#ddd'; g.fillRect(940, 420, 10, 760);
+  const wv = Math.sin(t * 6) * 8; withT(1010, 500, .55, () => { g.fillStyle = '#1E9E4A'; g.beginPath(); g.moveTo(-120, -85); g.quadraticCurveTo(0, -85 + wv, 120, -85); g.lineTo(120, 85); g.quadraticCurveTo(0, 85 + wv, -120, 85); g.fill();
+    g.fillStyle = '#F6D23C'; g.beginPath(); g.moveTo(0, -70 + wv / 2); g.lineTo(110, 0); g.lineTo(0, 70 + wv / 2); g.lineTo(-110, 0); g.fill(); g.fillStyle = '#21409A'; g.beginPath(); g.arc(0, wv / 2, 40, 0, 7); g.fill(); });
+  // o presidente (silhueta sem rosto, faixa verde e amarela) no alto da rampa
+  const wave = Math.sin(t * 7) * 25;
+  drawGuy(560, gy - 40, .62, { ...BASE, armF: [-150 + wave, -10], noFace: true }, 1, null, { body: '#1B2233', hi: '#3A4560', back: '#141A28', pants: '#141A28', sash: true });
+  // multidão
+  const R = rng(21); for (let row = 0; row < 4; row++) for (let i = 0; i < 14; i++) {
+    const x = i * 82 + (row % 2) * 40 + (R() - .5) * 20, y = 1330 + row * 120, b = Math.abs(Math.sin(t * 9 + i + row * 2)) * (t > HIT.posse ? 18 : 4);
+    g.fillStyle = ['#2B2F45', '#4A3B52', '#3E5A6B', '#5B4636'][(i + row) % 4]; g.beginPath(); g.arc(x, y - 70 - b, 34, 0, 7); g.fill(); rr(x - 46, y - 40 - b, 92, 200, 34); g.fill();
+    if (t > HIT.posse && (i + row) % 3 === 0) stroke([[x + 30, y - 30 - b], [x + 52, y - 110 - b]], 16, g.fillStyle); }
+  // confete verde e amarelo na palavra "posse"
+  if (t > HIT.posse - F) { const R2 = rng(33), dt = t - HIT.posse; for (let i = 0; i < 90; i++) {
+    const x = R2() * W, vy = 300 + R2() * 300, y = -40 + dt * vy + Math.sin(dt * 4 + i) * 20 + (R2() * 300 - 300);
+    g.fillStyle = ['#1E9E4A', '#F6D23C', '#FFFFFF'][i % 3]; withT(x + Math.sin(dt * 3 + i) * 30, y, 1, () => g.fillRect(-9, -5, 18, 10), dt * 6 + i); } }
+  // folhinha 14 → 15 e o nome
+  calendar(200, 360, .7, 'MARÇO', 15, '1990', ease.inOut(prog(t, HIT.posse15 - .05, HIT.posse15 + .3)), 14);
+  if (t > HIT.nome - F) withT(W / 2 + 60, 700, hitS(t, HIT.nome, .2), () => {
+    rr(-330, -62, 660, 124, 20); g.fillStyle = 'rgba(14,18,30,.9)'; g.fill(); g.fillStyle = C.yel; g.fillRect(-330, -62, 14, 124);
+    txt('FERNANDO COLLOR', 12, -14, 54, 900, '#fff'); txt('toma posse · 15/03/1990', 12, 34, 30, 600, 'rgba(255,255,255,.75)'); });
+}
+
+// ---------- cena E: o anúncio na TV (17,93 – 21,1) ----------
+function sceneE(t) {
+  const lt = t - SC[4];
+  g.fillStyle = '#1D2236'; g.fillRect(0, 0, W, H);
+  g.fillStyle = 'rgba(255,255,255,.03)'; for (let x = 0; x < W; x += 90) g.fillRect(x, 0, 36, 1500);
+  g.fillStyle = '#2A2233'; g.fillRect(0, 1500, W, H);
+  // TV ligada (luz azul na sala)
+  const tvx = 330, tvy = 760;
+  const glow = g.createRadialGradient(tvx, tvy, 50, tvx, tvy, 900); glow.addColorStop(0, 'rgba(120,170,255,.35)'); glow.addColorStop(1, 'rgba(120,170,255,0)'); g.fillStyle = glow; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#4A3A2A'; rr(tvx - 280, tvy + 220, 560, 300, 12); g.fill();
+  rr(tvx - 250, tvy - 210, 500, 430, 44); g.fillStyle = '#3A3530'; g.fill();
+  g.save(); rr(tvx - 210, tvy - 175, 370, 340, 54); g.clip();
+  g.fillStyle = '#0E2A5A'; g.fillRect(tvx - 220, tvy - 180, 400, 360);
+  // âncora (silhueta) e manchete
+  g.fillStyle = '#081A3A'; g.beginPath(); g.arc(tvx - 25, tvy - 30, 50, 0, 7); g.fill(); rr(tvx - 110, tvy + 20, 170, 160, 50); g.fill();
+  g.fillStyle = C.red; g.fillRect(tvx - 220, tvy + 70, 400, 50); txt('URGENTE', tvx - 25, tvy + 96, 34, 900, '#fff');
+  if (t > HIT.plano - F) withT(tvx - 25, tvy - 40, hitS(t, HIT.plano, .3), () => { rr(-170, -110, 340, 140, 10); g.fillStyle = '#F4F1E8'; g.fill();
+    txt('NOVO PLANO', 0, -70, 44, 900, '#0E2A5A'); txt('ECONÔMICO', 0, -22, 44, 900, C.red); });
+  g.fillStyle = 'rgba(255,255,255,.06)'; for (let y = tvy - 180; y < tvy + 180; y += 6) g.fillRect(tvx - 220, y, 400, 2);
+  g.restore();
+  for (const k of [0, 1]) { g.fillStyle = '#BFB6A8'; g.beginPath(); g.arc(tvx + 200, tvy - 100 + k * 70, 20, 0, 7); g.fill(); }
+  // sofá e o boneco sentado, assistindo
+  g.fillStyle = '#7A3E35'; rr(560, 1330, 470, 200, 30); g.fill(); rr(540, 1180, 510, 170, 40); g.fillStyle = '#8E4A40'; g.fill();
+  const lean = lerp(0, 18, ease.inOut(prog(t, 19.3, 20.4)));
+  const shock = t > HIT.plano ? sp(t - HIT.plano, 'snappy') : 0;
+  const sit = { ...BASE, bob: 88, lean, legF: [-90, 90], legB: [-86, 88], armB: [-40, -60], handF: [-110, -200 - shock * 30], eyes: shock > .3 ? 'wide' : 'open', mouth: shock > .3 ? 'o' : 'flat', brow: shock > .3 ? 1 : 0 };
+  drawGuy(800, 1500, 1.2, { ...sit, noShadow: true }, -1, (h) => { withT(h[0], h[1] - 24, 1, () => { rr(-30, -40, 60, 70, 10); g.fillStyle = '#E8E0D0'; g.fill(); g.strokeStyle = '#E8E0D0'; g.lineWidth = 8; g.beginPath(); g.arc(34, -6, 18, -1.4, 1.4); g.stroke(); }); });
+  // folhinha 15 → 16
+  g.globalAlpha = 1 - prog(t, 19.2, 19.5); calendar(860, 340, .7, 'MARÇO', 16, '1990', ease.inOut(prog(t, HIT.seguinte - .05, HIT.seguinte + .3)), 15); g.globalAlpha = 1;
+}
+
+// ---------- legenda (palavra ativa acesa) ----------
+const GROUP = []; { let gi = 0, n = 0; WORDS.forEach((w, k) => { if (k && (/[.,?]$/.test(WORDS[k - 1][1]) || n === 3)) { gi++; n = 0; } GROUP.push(gi); n++; }); }
+function caption(t) {
+  let i = -1; for (let k = 0; k < WORDS.length; k++) if (WORDS[k][0] <= t) i = k; if (i < 0) return;
+  const end = WORDS[i + 1] ? WORDS[i + 1][0] : DUR; if (t - WORDS[i][0] > 1.0 && end - WORDS[i][0] > 1.0) return;   // some nas pausas longas
+  const gi = GROUP[i], g0 = GROUP.indexOf(gi), grp = WORDS.filter((_, k) => GROUP[k] === gi).map(w => w[1]);
+  const size = 76; g.font = `900 ${size}px ${SANS}`; const sw = grp.map(w => g.measureText(w.toUpperCase()).width); const gap = 36; const tot = sw.reduce((a, b) => a + b) + gap * (grp.length - 1);
+  const sc = Math.min(1, 940 / tot); let x = W / 2 - tot * sc / 2; const y = 1530;
+  g.save(); g.translate(0, y); g.scale(1, 1);
+  grp.forEach((w, k) => { const active = g0 + k === i, seen = g0 + k <= i; const cx = x + sw[k] * sc / 2;
+    withT(cx, 0, sc * (active ? 1 + .12 * (1 - sp(t - WORDS[i][0], 'snappy')) : 1), () => {
+      g.font = `900 ${size}px ${SANS}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+      g.strokeStyle = 'rgba(0,0,0,.85)'; g.lineWidth = 14; g.strokeText(w.toUpperCase(), 0, 0);
+      g.fillStyle = active ? C.yel : seen ? '#fff' : 'rgba(255,255,255,.55)'; g.fillText(w.toUpperCase(), 0, 0); });
+    x += (sw[k] + gap) * sc; });
+  g.restore();
+}
+
+// ---------- quadro ----------
+const SCENES = [sceneA, sceneB, sceneC, sceneD, sceneE];
+const ZOOM = [[0, 1.10, 1.04], [3.85, 1.06, 1.12], [8.29, 1.05, 1.12], [14.65, 1.12, 1.04], [17.93, 1.04, 1.22]];
+function draw(t) {
+  let si = 0; for (let i = 0; i < SC.length - 1; i++) if (t >= SC[i]) si = i;
+  const t0 = SC[si], t1 = SC[si + 1], k = (t - t0) / (t1 - t0);
+  let z = lerp(ZOOM[si][1], ZOOM[si][2], ease.sine(k));
+  // entrada de cena: soco de zoom saindo do corte
+  const inK = clamp((t - t0) / .35); z *= 1 + .12 * (1 - ease.out(inK));
+  let cx = W / 2, cy = H / 2; if (si === 4) { cx = lerp(W / 2, 420, ease.inOut(prog(t, 19.4, 20.8))); cy = lerp(H / 2, 820, ease.inOut(prog(t, 19.4, 20.8))); }
+  g.save(); camera(t, z, cx, cy); SCENES[si](t); g.restore();
+  // desfoque de movimento no corte (borrão rápido)
+  if (t - t0 < .12 && si > 0) { g.fillStyle = `rgba(255,255,255,${.5 * (1 - (t - t0) / .12)})`; g.fillRect(0, 0, W, H); }
+  // vinheta + grão
+  const vg = g.createRadialGradient(W / 2, H / 2, 500, W / 2, H / 2, 1250); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.5)'); g.fillStyle = vg; g.fillRect(0, 0, W, H);
+  const R = rng(Math.floor(t * 30) + 1); g.fillStyle = 'rgba(255,255,255,.035)'; for (let i = 0; i < 260; i++) g.fillRect(R() * W, R() * H, 2, 2);
+  caption(t);
+  // selo do canal
+  g.globalAlpha = .85; rr(40, 70, 330, 64, 32); g.fillStyle = 'rgba(10,12,20,.75)'; g.fill(); g.fillStyle = C.yel; g.beginPath(); g.arc(78, 102, 14, 0, 7); g.fill();
+  txt('CAPITAL OCULTO', 220, 104, 30, 900, '#fff'); g.globalAlpha = 1;
+}
+
+window.ready = Promise.all([document.fonts.load(`900 40px ${SANS}`), document.fonts.load(`700 40px ${TYPE}`)]);
+window.seek = async t => { await window.ready; g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, H); draw(t); };
+if (!navigator.webdriver) { let t0 = performance.now(); const loop = async () => { await window.seek(((performance.now() - t0) / 1000) % DUR); requestAnimationFrame(loop); }; loop(); }
+</script></body></html>

@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Teste palitinho · ovo frito</title>
+<link rel="stylesheet" href="../../lib/fonts.css">
+<style>html,body{margin:0;background:#000}canvas{display:block;max-width:100vw;max-height:100vh;margin:auto}</style></head>
+<body><canvas id="c"></canvas>
+<script type="module">
+import { clamp, lerp, prog, ease, spring, sp, track, keyframes, noise1, rng } from '../../lib/motion.js';
+
+const W = 1920, H = 1080, DUR = 20, F = 1 / 30;
+const cv = document.getElementById('c'); cv.width = W; cv.height = H;
+const g = cv.getContext('2d');
+const SANS = '"Avenir Next", "Helvetica Neue", sans-serif';
+const C = { ink: '#141217', hood: '#3F6FD8', hoodHi: '#7FA6FF', white: '#F7F4EE', acc: '#FFB347', ok: '#6EE7A0' };
+
+// ---------- utilidades ----------
+const rr = (x, y, w, h, r) => { g.beginPath(); g.roundRect(x, y, w, h, r); };
+const tw = (s, size, wt = 800) => { g.font = `${wt} ${size}px ${SANS}`; return g.measureText(s).width; };
+function txt(s, x, y, size, wt = 800, col = C.white, align = 'left', base = 'middle') { g.font = `${wt} ${size}px ${SANS}`; g.fillStyle = col; g.textAlign = align; g.textBaseline = base; g.fillText(s, x, y); }
+const hitS = (t, t0) => { const a = clamp((t - t0 + F) / F); return a <= 0 ? 0 : a * (1 + .22 * (1 - spring(t - t0, 600, 26))); };
+function withT(x, y, s, fn) { if (s <= 0) return; g.save(); g.translate(x, y); g.scale(s, s); fn(); g.restore(); }
+const imgs = {}; const load = (k, src) => new Promise(r => { const i = new Image(); i.onload = () => { imgs[k] = i; r(); }; i.onerror = () => r(); i.src = src; });
+const toScr = (cam, u, v) => [cam.ox + u * imgs.kitchen.width * cam.s, cam.oy + v * imgs.kitchen.height * cam.s];
+function cover(im, cx, cy, z, blur = 0) {   // desenha o cenário cobrindo a tela, com zoom z centrado em (cx, cy) do cenário [0..1]
+  if (!im) { g.fillStyle = '#334'; g.fillRect(0, 0, W, H); return; }
+  const s = Math.max(W / im.width, H / im.height) * z, iw = im.width * s, ih = im.height * s;
+  const ox = clamp(W / 2 - cx * iw, W - iw, 0), oy = clamp(H / 2 - cy * ih, H - ih, 0);
+  if (blur) g.filter = `blur(${blur}px)`; g.drawImage(im, ox, oy, iw, ih); g.filter = 'none';
+  return { ox, oy, s };
+}
+
+// ---------- o boneco (esqueleto 2D com cinemática direta) ----------
+// pose: ângulos em graus, 0 = para baixo; positivo gira para a frente (lado do rosto)
+const BASE = { lean: 0, head: 0, armB: [10, -10], armF: [-10, -15], legB: [0, 0], legF: [0, 0], eyes: 'open', mouth: 'flat', look: 0 };
+const L = { torso: 140, upA: 74, foA: 70, thigh: 88, shin: 88, head: 76 };
+const rad = d => d * Math.PI / 180;
+function limb(x, y, a1, a2, l1, l2, dir) {  // devolve juntas [joelho/cotovelo, ponta]
+  const j = [x + Math.sin(rad(a1)) * l1 * dir, y + Math.cos(rad(a1)) * l1];
+  const e = [j[0] + Math.sin(rad(a1 + a2)) * l2 * dir, j[1] + Math.cos(rad(a1 + a2)) * l2];
+  return [j, e];
+}
+function ik(S, T, l1, l2, bend) {   // cotovelo para alcançar T a partir de S; bend = +1/-1 lado da dobra
+  const dx = T[0] - S[0], dy = T[1] - S[1]; let d = Math.hypot(dx, dy); d = clamp(d, 1, l1 + l2 - .5);
+  const a = Math.atan2(dy, dx), c = clamp((l1 * l1 + d * d - l2 * l2) / (2 * l1 * d), -1, 1), b = Math.acos(c) * bend;
+  const e = [S[0] + Math.cos(a + b) * l1, S[1] + Math.sin(a + b) * l1];
+  const h = [S[0] + Math.cos(a) * d, S[1] + Math.sin(a) * d]; return [e, h];
+}
+function stroke(pts, w, col) { g.strokeStyle = col; g.lineWidth = w; g.lineCap = 'round'; g.lineJoin = 'round'; g.beginPath(); g.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) g.lineTo(p[0], p[1]); g.stroke(); }
+function drawGuy(x, y, s, P, dir = 1, extra) {
+  // x,y = ponto entre os pés no chão; s = escala; dir = 1 olha para a direita
+  g.save(); g.translate(x, y); g.scale(s, s);
+  // sombra no chão
+  g.fillStyle = 'rgba(0,0,0,.28)'; g.beginPath(); g.ellipse(0, 4, 95, 16, 0, 0, 7); g.fill();
+  const hipY = -(L.thigh + L.shin) + (P.bob || 0);
+  const hip = [0, hipY];
+  const lean = rad(P.lean) * dir;
+  const neck = [hip[0] + Math.sin(lean) * L.torso, hip[1] - Math.cos(lean) * L.torso];
+  const sh = [lerp(hip[0], neck[0], .84), lerp(hip[1], neck[1], .84)];
+  // perna de trás, braço de trás (mais escuros)
+  const [kB, fB] = limb(hip[0] - 6 * dir, hip[1], P.legB[0], P.legB[1], L.thigh, L.shin, dir);
+  stroke([[hip[0] - 8 * dir, hip[1]], kB, fB], 30, '#0c0b0e'); stroke([fB, [fB[0] + 24 * dir, fB[1]]], 26, '#0c0b0e');
+  const [eB, hB] = P.handB ? ik(sh, [P.handB[0] * dir, P.handB[1]], L.upA, L.foA, dir) : limb(sh[0], sh[1], P.armB[0], P.armB[1], L.upA, L.foA, dir);
+  stroke([sh, eB], 36, '#2c50a8'); stroke([eB, hB], 26, '#0c0b0e'); g.fillStyle = '#0c0b0e'; g.beginPath(); g.arc(hB[0], hB[1], 16, 0, 7); g.fill();
+  // perna da frente
+  const [kF, fF] = limb(hip[0] + 6 * dir, hip[1], P.legF[0], P.legF[1], L.thigh, L.shin, dir);
+  stroke([[hip[0] + 8 * dir, hip[1]], kF, fF], 32, C.ink); stroke([fF, [fF[0] + 26 * dir, fF[1]]], 28, C.ink);
+  // moletom (tronco)
+  g.save(); g.translate(hip[0], hip[1]); g.rotate(lean);
+  rr(-52, -L.torso - 10, 104, L.torso + 28, 38); g.fillStyle = C.hood; g.fill();
+  g.strokeStyle = C.hoodHi; g.lineWidth = 3; g.globalAlpha = .55; g.beginPath(); g.moveTo(-36 * dir, -L.torso + 20); g.lineTo(-36 * dir, 6); g.stroke(); g.globalAlpha = 1;
+  rr(-36, -46, 72, 30, 12); g.fillStyle = '#3563c4'; g.fill();   // bolso
+  g.restore();
+  // cabeça
+  const hc = [neck[0] + Math.sin(lean) * (L.head - 6), neck[1] - Math.cos(lean) * (L.head - 6)];
+  g.save(); g.translate(hc[0], hc[1]); g.rotate(rad(P.head) * dir);
+  // capuz atrás da cabeça
+  g.fillStyle = '#2f5cc0'; g.beginPath(); g.ellipse(-22 * dir, 22, 52, 40, 0, 0, 7); g.fill();
+  g.fillStyle = C.ink; g.beginPath(); g.arc(0, 0, L.head, 0, 7); g.fill();
+  g.strokeStyle = 'rgba(255,220,170,.35)'; g.lineWidth = 4; g.beginPath(); g.arc(0, 0, L.head - 2, rad(200) , rad(290)); g.stroke(); // luz de recorte
+  // rosto
+  const ex = 22 * dir + P.look * 6, ey = -8;
+  g.fillStyle = C.white;
+  for (const k of [-1, 1]) {
+    const cx = ex + k * 20;
+    if (P.eyes === 'happy') { g.strokeStyle = C.white; g.lineWidth = 6; g.beginPath(); g.arc(cx, ey + 6, 10, Math.PI * 1.1, Math.PI * 1.9); g.stroke(); }
+    else if (P.eyes === 'closed') { g.fillRect(cx - 10, ey - 1, 20, 5); }
+    else { const h = P.eyes === 'wide' ? 17 : P.eyes === 'half' ? 7 : 13; g.beginPath(); g.ellipse(cx, ey, 9, h, 0, 0, 7); g.fill(); g.fillStyle = C.ink; g.beginPath(); g.arc(cx + 3 * dir + P.look * 2, ey + (P.eyes === 'half' ? 1 : 2), 4.2, 0, 7); g.fill(); g.fillStyle = C.white; }
+  }
+  g.fillStyle = C.white; g.strokeStyle = C.white; g.lineWidth = 6; g.lineCap = 'round';
+  const mx = ex + 2 * dir, my = 26;
+  if (P.mouth === 'smile') { g.beginPath(); g.arc(mx, my - 8, 14, rad(20), rad(160)); g.stroke(); }
+  else if (P.mouth === 'big') { g.beginPath(); g.arc(mx, my - 6, 16, 0, Math.PI); g.fill(); }
+  else if (P.mouth === 'o') { g.beginPath(); g.ellipse(mx, my, 8, 11, 0, 0, 7); g.fill(); }
+  else { g.beginPath(); g.moveTo(mx - 10, my); g.lineTo(mx + 10, my); g.stroke(); }
+  g.restore();
+  // braço da frente (por cima do corpo) + objeto na mão
+  const [eF, hF] = P.handF ? ik(sh, [P.handF[0] * dir, P.handF[1]], L.upA, L.foA, dir) : limb(sh[0], sh[1], P.armF[0], P.armF[1], L.upA, L.foA, dir);
+  if (extra && extra.behind) extra.draw(hF, dir);
+  stroke([sh, eF], 38, C.hood); stroke([eF, hF], 27, C.ink); g.fillStyle = C.ink; g.beginPath(); g.arc(hF[0], hF[1], 17, 0, 7); g.fill();
+  if (extra && !extra.behind) extra.draw(hF, dir);
+  g.restore();
+}
+function walkPose(ph, amp = 1) {   // ciclo de caminhada
+  const s = Math.sin(ph), c = Math.cos(ph);
+  return { ...BASE, lean: 6, bob: -Math.abs(c) * 8 * amp,
+    legF: [28 * s * amp, (s < 0 ? -38 * -s : -6) * amp], legB: [-28 * s * amp, (s > 0 ? -38 * s : -6) * amp],
+    armF: [-26 * s * amp, -20 * amp], armB: [26 * s * amp, -20 * amp] };
+}
+const mixPose = (a, b, k) => { const o = { ...(k < .5 ? a : b) }; for (const key of ['lean', 'head', 'bob', 'look']) o[key] = lerp(a[key] || 0, b[key] || 0, k);
+  for (const key of ['armB', 'armF', 'legB', 'legF']) o[key] = [lerp(a[key][0], b[key][0], k), lerp(a[key][1], b[key][1], k)]; return o; };
+
+// ---------- etiqueta de interface (vidro escuro, ícone, texto) ----------
+function chip(t, t0, t1, x, y, label, num, col = C.acc) {
+  if (t < t0 - F || t > t1) return;
+  const s = hitS(t, t0) * clamp((t1 - t) / .15);
+  withT(x, y, s, () => {
+    const w = tw(label, 34) + (num ? 96 : 50);
+    g.save(); g.shadowColor = 'rgba(0,0,0,.45)'; g.shadowBlur = 30; rr(-w / 2, -34, w, 68, 34); g.fillStyle = 'rgba(14,14,20,.78)'; g.fill(); g.restore();
+    rr(-w / 2, -34, w, 68, 34); g.strokeStyle = 'rgba(255,255,255,.18)'; g.lineWidth = 2; g.stroke();
+    let x0 = -w / 2 + 26;
+    if (num) { g.fillStyle = col; g.beginPath(); g.arc(x0 + 20, 0, 22, 0, 7); g.fill(); txt(num, x0 + 20, 2, 26, 800, '#1a1208', 'center'); x0 += 58; }
+    txt(label, x0, 2, 34, 800, C.white);
+  });
+}
+
+// ---------- o ovo, o óleo, a chama ----------
+function eggWhite(cx, cy, r, t, seed, cook) {   // clara orgânica; cook 0..1 = translúcida → branca com borda dourada
+  const R = rng(seed), h = [2, 3, 4, 7].map(k => [k, (R() - .5) * (.55 / Math.sqrt(k)), R() * 6.3]);
+  const pts = []; const n = 64;
+  for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2; let k = 1; for (const [m, amp, ph] of h) k += amp * Math.sin(a * m + ph + t * .4 * (1 - cook));
+    pts.push([cx + Math.cos(a) * r * k, cy + Math.sin(a) * r * k * .94]); }
+  const path = () => { g.beginPath(); const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]; let m0 = mid(pts[n - 1], pts[0]); g.moveTo(m0[0], m0[1]);
+    for (let i = 0; i < n; i++) { const p = pts[i], m = mid(p, pts[(i + 1) % n]); g.quadraticCurveTo(p[0], p[1], m[0], m[1]); } g.closePath(); };
+  path();
+  if (cook > .25) { g.save(); g.lineWidth = 22 * cook; g.strokeStyle = `rgba(190,120,45,${.9 * (cook - .25) / .75})`; g.filter = 'blur(2px)'; g.stroke(); g.restore(); path(); }
+  g.fillStyle = `rgba(255,255,255,${.30 + .66 * cook})`; g.fill();
+  const gr = g.createRadialGradient(cx - r * .3, cy - r * .35, 0, cx - r * .3, cy - r * .35, r * .7); gr.addColorStop(0, `rgba(255,255,255,${.35 * (1 - cook * .6)})`); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; path(); g.fill();
+  g.fillStyle = `rgba(255,255,255,${.18 + .2 * cook})`; g.beginPath(); g.ellipse(cx + r * .12, cy - r * .1, r * .48, r * .42, .3, 0, 7); g.fill();
+}
+function yolk(cx, cy, r) {
+  const gr = g.createRadialGradient(cx - r * .35, cy - r * .35, r * .1, cx, cy, r);
+  gr.addColorStop(0, '#FFE08A'); gr.addColorStop(.55, '#FFB21E'); gr.addColorStop(1, '#E58A0C');
+  g.fillStyle = gr; g.beginPath(); g.arc(cx, cy, r, 0, 7); g.fill();
+  g.fillStyle = 'rgba(255,255,255,.75)'; g.beginPath(); g.ellipse(cx - r * .38, cy - r * .42, r * .22, r * .12, -.6, 0, 7); g.fill();
+}
+function bubbles(cx, cy, r, t, n = 26, seed = 3) {
+  const R = rng(seed);
+  for (let i = 0; i < n; i++) { const a = R() * Math.PI * 2, d = r * (.85 + R() * .25), ph = (t * (1.5 + R() * 2) + R()) % 1;
+    const br = 3 + R() * 7; g.strokeStyle = `rgba(255,255,255,${.55 * (1 - ph)})`; g.lineWidth = 2; g.beginPath(); g.arc(cx + Math.cos(a) * d, cy + Math.sin(a) * d * .92, br * (.5 + ph), 0, 7); g.stroke(); }
+}
+function flameRing(cx, cy, r, t, on) {
+  if (on <= 0) return; g.save(); g.filter = 'blur(5px)'; g.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 40; i++) { const a = i / 40 * Math.PI * 2, f = (.6 + .4 * noise1(t * 11 + i * 1.7, 5)) * on;
+    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r * .94, len = 26 * f;
+    g.strokeStyle = `rgba(110,170,255,${.95 * on})`; g.lineWidth = 11 * f; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len * .94); g.stroke(); }
+  g.restore();
+}
+function heatWaves(x, y, t, a) {
+  g.save(); g.globalAlpha = a; g.strokeStyle = 'rgba(255,255,255,.5)'; g.lineWidth = 4; g.lineCap = 'round';
+  for (let k = 0; k < 3; k++) { const ph = (t * .8 + k / 3) % 1, yy = y - ph * 160, xx = x + (k - 1) * 70;
+    g.globalAlpha = a * Math.sin(ph * Math.PI); g.beginPath(); for (let i = 0; i <= 20; i++) { const yy2 = yy - i * 4; g.lineTo(xx + Math.sin(i * .6 + t * 6 + k) * 8, yy2); } g.stroke(); }
+  g.restore();
+}
+function bottle(hand, dir, tilt) {   // garrafa de óleo na mão
+  g.save(); g.translate(hand[0], hand[1]); g.rotate(rad(tilt) * dir);
+  rr(-18, -78, 36, 92, 12); g.fillStyle = 'rgba(240,200,90,.92)'; g.fill(); rr(-10, -98, 20, 24, 6); g.fillStyle = '#2b6b3a'; g.fill();
+  rr(-18, -50, 36, 30, 4); g.fillStyle = '#f7f4ee'; g.fill(); g.restore();
+}
+function plate(hand, dir) {
+  g.save(); g.translate(hand[0] + 10 * dir, hand[1] - 14);
+  g.fillStyle = '#f2efe9'; g.beginPath(); g.ellipse(0, 0, 95, 26, 0, 0, 7); g.fill(); g.strokeStyle = '#d8d3cb'; g.lineWidth = 4; g.stroke();
+  g.fillStyle = '#fff'; g.beginPath(); g.ellipse(0, -6, 58, 16, 0, 0, 7); g.fill(); g.strokeStyle = 'rgba(196,128,52,.9)'; g.lineWidth = 4; g.stroke();
+  g.fillStyle = '#FFB21E'; g.beginPath(); g.ellipse(6, -10, 18, 10, 0, 0, 7); g.fill();
+  g.restore();
+}
+
+// ---------- cena ----------
+const SC = [0, 3.2, 6.2, 9.2, 13.2, 16.6, 20];   // limites das cenas
+function vignette(a = .55) { const vg = g.createRadialGradient(W / 2, H / 2, H * .35, W / 2, H / 2, H * .95); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, `rgba(0,0,0,${a})`); g.fillStyle = vg; g.fillRect(0, 0, W, H); }
+function lightLeak(t) { const gr = g.createRadialGradient(260, 140, 40, 260, 140, 900); gr.addColorStop(0, `rgba(255,214,150,${.16 + .03 * Math.sin(t)})`); gr.addColorStop(1, 'rgba(255,214,150,0)'); g.fillStyle = gr; g.fillRect(0, 0, W, H); }
+
+function panClose(t, z, egg, cook, flame, heat) {
+  const cam = cover(imgs.pan, .506, .5, z);
+  const pcx = cam.ox + .506 * imgs.pan.width * cam.s, pcy = cam.oy + .5 * imgs.pan.height * cam.s, pr = .2 * imgs.pan.width * cam.s;
+  flameRing(pcx, pcy, pr * 1.24, t, flame);
+  if (egg) egg(pcx, pcy, pr);
+  if (heat > 0) heatWaves(pcx, pcy - 40, t, heat);
+}
+
+function draw(t) {
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+  // tremor de câmera de mão, sutil
+  g.translate(noise1(t * .7, 3) * 4, noise1(t * .6, 9) * 4);
+
+  if (t < SC[1]) {                       // 1 · cozinha aberta: ele entra andando até o fogão
+    const z = keyframes(t, [[0, 1.04], [SC[1], 1.12]], ease.inOut)[0];
+    cover(imgs.kitchen, .55, .55, z, 1.2);
+    const walkEnd = 2.45, k = clamp(t / walkEnd), x = lerp(-150, 1080, ease.out(Math.min(1, k * 1.05)));
+    const P = t < walkEnd ? walkPose(t * 9.5) : mixPose(walkPose(walkEnd * 9.5), { ...BASE, look: 1, eyes: 'open', mouth: 'flat' }, sp(t - walkEnd, 'snappy'));
+    drawGuy(x, 1030, 1.2, P, 1);
+    chip(t, .55, SC[1] - .05, 360, 120, '07:12 · CAFÉ DA MANHÃ', null);
+  } else if (t < SC[2]) {                // 2 · close da frigideira esquentando
+    const u = t - SC[1]; const z = 1.04 + u * .02;
+    panClose(t, z, null, 0, sp(u - .25, 'snappy'), clamp((u - .9) / .6));
+    chip(t, SC[1] + .3, SC[2] - .05, 960, 110, 'AQUECER A FRIGIDEIRA', '1');
+  } else if (t < SC[3]) {                // 3 · plano médio: o fio de óleo
+    const u = t - SC[2];
+    const cam = cover(imgs.kitchen, .64, .6, 1.2, 2.2);
+    const pan = toScr(cam, .744, .566);                        // centro da frigideira na tela
+    const base = toScr(cam, .70, .875), top = toScr(cam, .70, .61);   // rodapé do armário e tampo do balcão
+    const S = (base[1] - top[1]) / (L.thigh + L.shin) * .72, gy = base[1] + 6, gx = top[0] - 40 * S;  // quadril na altura do balcão
+    const tilt = keyframes(u, [[0, 10], [.5, 10], [1.1, 125], [2.5, 125], [2.9, 20]], ease.inOut)[0];
+    const reach = keyframes(u, [[0, 0], [.6, 1], [2.6, 1], [3, .3]], ease.inOut)[0];
+    const handT = [lerp(60, (pan[0] - 95 - gx) / S, reach), lerp(-200, (pan[1] - 75 - gy) / S, reach)];
+    const P = { ...BASE, lean: 8 + 6 * reach, look: 1, eyes: 'half', mouth: 'flat', handF: handT, armB: [12, -25] };
+    let mouth = null;
+    drawGuy(gx, gy, S, P, 1, { behind: false, draw: (h, d) => { bottle(h, d, tilt); const a = rad(tilt); mouth = [h[0] + Math.sin(a) * 98, h[1] - Math.cos(a) * 98]; } });
+    if (u > 1.0 && u < 2.6 && mouth) {
+      const mx = gx + mouth[0] * S, my = gy + mouth[1] * S, pour = clamp((u - 1.0) / .15) * clamp((2.6 - u) / .15);
+      g.strokeStyle = 'rgba(244,200,80,.9)'; g.lineWidth = 8 * pour; g.lineCap = 'round'; g.beginPath(); g.moveTo(mx, my);
+      g.quadraticCurveTo(mx + 30, (my + pan[1]) / 2, pan[0] - 10 + Math.sin(t * 20) * 3, pan[1] - 10); g.stroke();
+      g.fillStyle = `rgba(255,220,120,${.5 * pour})`; g.beginPath(); g.ellipse(pan[0] - 10, pan[1] - 8, 40 * pour, 9 * pour, 0, 0, 7); g.fill();
+    }
+    chip(t, SC[2] + .3, SC[3] - .05, 1360, 140, 'UM FIO DE ÓLEO', '2');
+  } else if (t < SC[5]) {                // 4–5 · close: o ovo cai, espalha, cozinha
+    const u = t - SC[3], z = 1.12 + (t - SC[3]) * .015;
+    const crackT = .55, drop = .95;
+    const cook = clamp((t - SC[4] - .2) / 3.0);
+    panClose(t, z, (cx, cy, pr) => {
+      // óleo brilhando
+      g.fillStyle = 'rgba(255,220,120,.10)'; g.beginPath(); g.ellipse(cx, cy, pr * .9, pr * .82, 0, 0, 7); g.fill();
+      const hitT = .62;
+      if (u > hitT) {
+        const spread = sp(u - hitT, 'heavy'), wr = pr * (.12 + .46 * spread);
+        eggWhite(cx - 14, cy + 12, wr, t, 7, cook); if (u > hitT + .4) bubbles(cx - 14, cy + 12, wr * .98, t, 30, 4);
+        const ys = 1 + .25 * (1 - sp(u - hitT, 'playful')); g.save(); g.translate(cx + 6, cy - 4); g.scale(ys, 1 / ys); yolk(0, 0, pr * .15); g.restore();
+        // respingo do impacto
+        const sp1 = clamp((u - hitT) / .3); if (sp1 < 1) { g.strokeStyle = `rgba(255,255,255,${.7 * (1 - sp1)})`; g.lineWidth = 5; g.beginPath(); g.arc(cx, cy, pr * (.15 + .5 * sp1), 0, 7); g.stroke(); }
+      }
+      // o ovo inteiro desce (cresce como quem vem em direção à câmera de cima) e racha
+      if (u < hitT + .5) {
+        const k = clamp(u / hitT), y0 = lerp(cy - pr * .95, cy - 30, ease.in(k)), sc = lerp(1.35, 1, k);
+        const crack = clamp((u - hitT + .08) / .08), fly = clamp((u - hitT) / .5);
+        g.save(); g.globalAlpha = 1 - clamp((u - hitT - .3) / .2);
+        for (const sgn of [-1, 1]) {
+          g.save(); g.translate(cx + sgn * (crack * 8 + fly * pr * 1.1), y0 - fly * pr * .5); g.rotate(sgn * fly * 1.6); g.scale(sc, sc);
+          g.beginPath(); g.ellipse(0, 0, 62, 78, 0, sgn < 0 ? Math.PI / 2 : -Math.PI / 2, sgn < 0 ? Math.PI * 1.5 : Math.PI / 2);
+          if (crack > 0) { for (let j = 0; j <= 6; j++) g.lineTo(sgn * (j % 2 ? 7 : -3) * crack, -78 + j * 26); } g.closePath();
+          const eg = g.createRadialGradient(-20, -30, 5, 0, 0, 90); eg.addColorStop(0, '#FFF6E8'); eg.addColorStop(1, '#E9D2B0'); g.fillStyle = eg; g.fill();
+          g.strokeStyle = 'rgba(150,110,70,.35)'; g.lineWidth = 2; g.stroke(); g.restore();
+        }
+        g.restore();
+      }
+    }, cook, 1, .7);
+    chip(t, SC[3] + .45, SC[4] - .05, 960, 110, 'QUEBRE O OVO', '3');
+    if (t > SC[4] - F) {
+      chip(t, SC[4] + .2, SC[5] - .05, 960, 110, 'CLARA FIRME, GEMA MOLE', '4');
+      // cronômetro de interface
+      const p = clamp((t - SC[4] - .2) / 3.1), sec = Math.floor(p * 150);
+      withT(1620, 820, hitS(t, SC[4] + .2) * clamp((SC[5] - t) / .15), () => {
+        g.save(); g.shadowColor = 'rgba(0,0,0,.5)'; g.shadowBlur = 30; g.fillStyle = 'rgba(14,14,20,.8)'; g.beginPath(); g.arc(0, 0, 110, 0, 7); g.fill(); g.restore();
+        g.strokeStyle = 'rgba(255,255,255,.15)'; g.lineWidth = 12; g.beginPath(); g.arc(0, 0, 86, 0, 7); g.stroke();
+        g.strokeStyle = C.acc; g.lineCap = 'round'; g.beginPath(); g.arc(0, 0, 86, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); g.stroke();
+        txt(`${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`, 0, -6, 46, 800, C.white, 'center');
+        txt('2–3 MIN', 0, 38, 20, 700, 'rgba(255,255,255,.6)', 'center');
+      });
+    }
+  } else {                               // 6 · pronto: ele com o prato
+    const u = t - SC[5];
+    cover(imgs.kitchen, .6, .6, 1.35 + u * .02, 2.2);
+    const hop = Math.max(0, Math.sin(clamp((u - .5) / .45) * Math.PI)) * 34;
+    const P = { ...BASE, lean: -4, eyes: u > .5 ? 'happy' : 'open', mouth: u > .5 ? 'big' : 'smile', handF: [70, -L.thigh - L.shin - 70], handB: [40, -L.thigh - L.shin - 64], bob: -hop, look: 0 };
+    drawGuy(900, 1090, 1.35, P, 1, { behind: false, draw: (h, d) => plate(h, d) });
+    chip(t, SC[5] + .55, DUR, 960, 130, 'PRONTO', '✓', C.ok);
+  }
+  lightLeak(t); vignette();
+  // corte com clarão curto entre as cenas
+  for (const c of SC.slice(1, -1)) { const d = t - c; if (d >= 0 && d < .12) { g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = `rgba(255,255,255,${.35 * (1 - d / .12)})`; g.fillRect(0, 0, W, H); } }
+}
+
+window.ready = Promise.all([load('kitchen', 'assets/cozinha.jpg'), load('pan', 'assets/frigideira.jpg'), document.fonts.load(`800 40px ${SANS}`)]);
+window.seek = async t => { await window.ready; draw(t); };
+if (!navigator.webdriver) { const t0 = performance.now(); const loop = async () => { await window.seek(((performance.now() - t0) / 1000) % DUR); requestAnimationFrame(loop); }; loop(); }
+</script></body></html>
